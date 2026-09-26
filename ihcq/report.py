@@ -46,7 +46,7 @@ def build_report(assets: list, rows: list, stats: dict | None, out_path, title="
             fig.text(0.04, 0.95, s["image"], fontsize=15, weight="bold")
             fig.text(0.04, 0.92, f"{s['width']}×{s['height']} px · compartment {s['compartment']} · cut points {s['thr_weak']}/{s['thr_moderate']}/{s['thr_strong']} OD · stain: {s['second_stain']}", fontsize=8.5, color="#555")
             panels = [("original", "Original"), ("cells", "Nuclei by bin  (blue 0 · yellow 1+ · orange 2+ · red 3+)"), ("positivity", "Positivity map (per pixel)"), ("stains", "Stain separation: original | hematoxylin | DAB")]
-            pos = [[0.04, 0.50, 0.44, 0.40], [0.52, 0.50, 0.44, 0.40], [0.04, 0.06, 0.44, 0.40], [0.52, 0.31, 0.44, 0.16]]
+            pos = [[0.04, 0.50, 0.44, 0.40], [0.52, 0.50, 0.44, 0.40], [0.04, 0.06, 0.44, 0.40], [0.52, 0.335, 0.44, 0.14]]
             for (key, cap), p in zip(panels, pos):
                 pth = a["images"].get(key)
                 if not pth or not Path(pth).exists(): continue
@@ -54,22 +54,25 @@ def build_report(assets: list, rows: list, stats: dict | None, out_path, title="
                 if key in ("cells", "positivity") and im.shape[0] > s["height"]: im = im[im.shape[0] - s["height"]:]
                 ax.imshow(im); ax.set_title(cap, fontsize=8, loc="left"); ax.axis("off")
             # metrics + histogram
-            ax = fig.add_axes([0.52, 0.155, 0.44, 0.14]); ax.axis("off")
+            ax = fig.add_axes([0.52, 0.115, 0.44, 0.205]); ax.axis("off")
             ci = s.get("pct_positive_ci95")
             lines = [f"H-score {s.get('h_score', '—')}    positive {s.get('pct_positive', '—')} %" + (f" (95% CI {ci[0]}–{ci[1]})" if ci else "") + f"    nuclei {s.get('n_cells', '—')}",
-                     f"Allred {s.get('allred_total', '—')}    IRS {s.get('irs', '—')}/12    hotspot {s.get('hotspot_pct_positive', '—')} % ({s.get('hotspot_window', '—')}-cell window)    profiler zone {s.get('profiler_zone', '—')}",
+                     f"Allred {s.get('allred_total', '—')}    IRS {s.get('irs', '—')}/12    "
+                     + (f"hotspot {s['hotspot_pct_positive']} % ({s['hotspot_window']}-cell window)" if s.get("hotspot_pct_positive") is not None else "hotspot — (too few cells)")
+                     + f"    profiler zone {s.get('profiler_zone', '—')}",
                      f"1+ {s.get('pct_1plus', '—')} %   2+ {s.get('pct_2plus', '—')} %   3+ {s.get('pct_3plus', '—')} %",
                      f"DAB area {s.get('dab_area_fraction_pct', '—')} %    mean DAB OD {s.get('mean_dab_od_tissue', '—')}    p95 {s.get('p95_dab_od_tissue', '—')}",
                      f"tissue {round((s.get('tissue_fraction') or 0) * 100)} % of field    white point {s.get('white_point_source')}    median nucleus r {s.get('median_nucleus_radius_px')} px"]
             if s.get("group"): lines.insert(0, f"group: {s['group']}")
             if s.get("roi_fraction") is not None: lines.insert(0, f"scored inside a drawn ROI — {round(s['roi_fraction'] * 100)} % of the tissue")
-            ax.text(0, 1, "\n".join(lines), fontsize=7.5, va="top", family="monospace", linespacing=1.4)
+            ax.text(0, 1, "\n".join(lines), fontsize=7, va="top", family="monospace", linespacing=1.45)
             flags = a.get("qc") or []
             if flags:
-                ax.text(0, 0.30, "\n".join(textwrap.fill("! " + f, 110) for f in flags[:3]), fontsize=6, va="top", color="#b25a00")
+                line_h = 7 * 1.45 / 72 / (0.205 * 8.27)          # one text line as a fraction of the axes height
+                ax.text(0, 1 - line_h * (len(lines) + 0.5), "\n".join(textwrap.fill("! " + f, 120) for f in flags[:3]), fontsize=6, va="top", color="#b25a00", linespacing=1.3)
             cells = a.get("cells")
             if cells is not None and len(cells):
-                axh = fig.add_axes([0.60, 0.055, 0.34, 0.075]); od = cells["dab_od"].to_numpy()
+                axh = fig.add_axes([0.60, 0.035, 0.34, 0.06]); od = cells["dab_od"].to_numpy()
                 n, edges, patches = axh.hist(od, bins=40, color="#999")
                 for p_, e in zip(patches, edges[:-1]):
                     b = (e >= s["thr_weak"]) + (e >= s["thr_moderate"]) + (e >= s["thr_strong"]); p_.set_facecolor(BIN_COL[int(b)])
