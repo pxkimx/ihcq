@@ -16,21 +16,10 @@
     </svg>
     <div><b>ihcq</b><span>chromogenic IHC quantification</span></div>
   </div>
-  <nav class="tabs" id="tabs">
-    <button data-view="score" aria-pressed="true">Score</button>
-    <button data-view="session">Session <em id="tab-count" hidden>0</em></button>
-    <button data-view="calibrate">Calibrate</button>
-    <button data-view="help">Help</button>
+  <nav class="jump" id="jump">
+    <a href="#sec-score">Score</a><a href="#sec-session">Session <em id="tab-count" hidden>0</em></a><a href="#sec-stats">Statistics</a><a href="#sec-calibrate">Calibrate</a><a href="#sec-help">Help</a>
   </nav>
   <div class="top-actions">
-    <div class="demo-wrap">
-      <button class="btn" id="demo">Demo field ▾</button>
-      <div class="menu" id="demo-menu" hidden>
-        <button data-kind="real"><b>Real IHC</b> · colon, membranous</button>
-        <button data-kind="negative">Synthetic · negative control</button><button data-kind="low">Synthetic · low</button>
-        <button data-kind="mixed">Synthetic · mixed 0–3+</button><button data-kind="high">Synthetic · high</button>
-      </div>
-    </div>
     <button class="icon" id="theme" title="Light / dark">◐</button>
     <button class="btn ghost" id="quit" title="Stop the local server">Quit</button>
   </div>
@@ -38,13 +27,26 @@
 
 <main>
 <!-- ============================ SCORE ============================ -->
-<section class="view" id="view-score">
+<section class="sec" id="sec-score">
   <aside class="side">
     <div class="card">
       <div class="drop" id="drop" tabindex="0" role="button">
         <div class="drop-art"><span class="b0"></span><span class="b1"></span><span class="b2"></span><span class="b3"></span></div>
         <b>Drop IHC images</b><span>PNG · JPG · TIFF — several at once is fine, or click to choose</span>
         <input id="file" type="file" accept="image/*" multiple hidden>
+      </div>
+      <div class="demo-row">
+        <span class="mut">No slide handy?</span>
+        <div class="demo-wrap">
+          <button class="btn sm" id="demo">Open a demo field ▾</button>
+          <div class="menu" id="demo-menu" hidden>
+            <button data-kind="real"><b>Real IHC</b> · colon, membranous</button>
+            <button data-kind="negative">Synthetic · negative control</button>
+            <button data-kind="low">Synthetic · low</button>
+            <button data-kind="mixed">Synthetic · mixed 0–3+</button>
+            <button data-kind="high">Synthetic · high</button>
+          </div>
+        </div>
       </div>
       <ul class="queue" id="queue"></ul>
     </div>
@@ -113,7 +115,6 @@
               <a id="dl-orig" download>Original image (PNG)</a>
               <a id="dl-cells-img" download>Labelled nuclei overlay (PNG)</a>
               <a id="dl-pos" download>Positivity map (PNG)</a>
-              <a id="dl-stains" download>Stain separation panels (PNG)</a>
               <a id="dl-cells" download>Per-cell table (CSV)</a>
               <a id="dl-session" href="/out/session_results.csv" download>Session table (CSV)</a>
             </div>
@@ -156,8 +157,16 @@
             <button class="btn sm ghost" id="reset-th">Reset</button>
           </div>
           <p class="mut" id="truth"></p>
-          <h3 style="margin-top:16px">Stain separation</h3>
-          <img class="stains" id="stains" alt="original | hematoxylin | DAB">
+        </div>
+      </div>
+
+      <div class="card" id="stain-card">
+        <div class="card-head"><h3>Stain separation <span class="mut">colour deconvolution — proves the two stains were pulled apart on this slide</span></h3>
+          <a class="btn sm" id="dl-stains" download>Download combined panel</a></div>
+        <div class="stain-grid">
+          <figure><img id="st-orig" alt="original"><figcaption>Original <a id="dl-st-orig" download>PNG ↓</a></figcaption></figure>
+          <figure><img id="st-hema" alt="hematoxylin only"><figcaption>Hematoxylin only <a id="dl-st-hema" download>PNG ↓</a></figcaption></figure>
+          <figure><img id="st-dab" alt="DAB only"><figcaption>DAB only <a id="dl-st-dab" download>PNG ↓</a></figcaption></figure>
         </div>
       </div>
     </div>
@@ -165,7 +174,7 @@
 </section>
 
 <!-- ============================ SESSION ============================ -->
-<section class="view" id="view-session" hidden>
+<section class="sec" id="sec-session"><h2 class="sec-title">Session</h2>
   <div class="card">
     <div class="card-head">
       <h3>Every image scored this session</h3>
@@ -181,7 +190,9 @@
       <div><h4>H-score per image</h4><div id="hplot"></div></div>
     </div>
   </div>
-  <div class="grid2 wide" style="margin-top:14px">
+</section>
+<section class="sec" id="sec-stats"><h2 class="sec-title">Statistics between images</h2>
+  <div class="grid2 wide">
     <div class="card">
       <div class="card-head"><h3>Compare groups</h3>
         <select id="stat-metric" style="width:auto"><option value="h_score">H-score</option><option value="pct_positive">% positive cells</option><option value="pct_3plus">% 3+ cells</option><option value="allred_total">Allred</option><option value="dab_area_fraction_pct">DAB area %</option><option value="mean_dab_od_tissue">mean DAB OD</option><option value="cells_per_tissue_px1e4">nuclear density</option></select></div>
@@ -206,7 +217,7 @@
 </section>
 
 <!-- ============================ CALIBRATE ============================ -->
-<section class="view" id="view-calibrate" hidden>
+<section class="sec" id="sec-calibrate"><h2 class="sec-title">Calibrate cut points</h2>
   <div class="grid2 wide">
     <div class="card">
       <h3>1 · Tell it which images are controls</h3>
@@ -222,7 +233,7 @@
 </section>
 
 <!-- ============================ HELP ============================ -->
-<section class="view" id="view-help" hidden>
+<section class="sec" id="sec-help"><h2 class="sec-title">Help</h2>
   <div class="grid2 wide">
     <div class="card prose">
       <h3>What the numbers mean</h3>

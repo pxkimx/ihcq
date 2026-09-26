@@ -16,8 +16,8 @@ if (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme
 let toastT; function toast(msg, bad = false) { const t = $("#toast"); t.textContent = msg; t.className = "toast" + (bad ? " bad" : ""); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, bad ? 6000 : 2600); }
 
 /* ---------- tabs ---------- */
-$$("#tabs button").forEach(b => b.onclick = () => showView(b.dataset.view));
-function showView(v) { $$("#tabs button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === v))); $$(".view").forEach(s => s.hidden = s.id !== "view-" + v); if (v === "session") renderSession(); if (v === "calibrate") renderCalib(); }
+function showView(v) { const el = document.getElementById("sec-" + v); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+let refreshT; function refreshAll() { clearTimeout(refreshT); refreshT = setTimeout(() => { renderSession(); renderCalib(); }, 80); }
 
 /* ---------- presets & settings ---------- */
 const PRESETS = {
@@ -68,7 +68,7 @@ $("#group").addEventListener("change", e => { if (state.cur) { setGroup(state.cu
 const dlm = $("#dl-menu"); $("#dl-btn").onclick = e => { e.stopPropagation(); dlm.hidden = !dlm.hidden; }; document.addEventListener("click", () => dlm.hidden = true);
 
 /* ---------- results ---------- */
-function add(j) { if (!state.results[j.id]) state.order.push(j.id); state.results[j.id] = j; $("#tab-count").textContent = state.order.length; $("#tab-count").hidden = false; }
+function add(j) { if (!state.results[j.id]) state.order.push(j.id); state.results[j.id] = j; $("#tab-count").textContent = state.order.length; $("#tab-count").hidden = false; refreshAll(); }
 async function show(id) {
   const j = state.results[id]; if (!j) return; state.cur = id; const s = j.summary;
   $$("#queue li").forEach(li => li.setAttribute("aria-current", String(li.dataset.id === id)));
@@ -78,7 +78,12 @@ async function show(id) {
   st.innerHTML = `<i></i>${kind === "dab" ? "Second stain is <b>DAB</b> — chromogenic IHC" : kind === "eosin" ? "Second stain is <b>eosin</b> — this is H&amp;E; DAB scores are not valid" : "Second stain <b>unrecognised</b> — check the stain separation"} <span class="mut">${s.second_stain_angle_to_dab}° from DAB · ${s.second_stain_angle_to_eosin}° from eosin</span>`;
   state.th = { ...j.thresholds }; $("#weak").value = state.th.weak; $("#moderate").value = state.th.moderate; $("#strong").value = state.th.strong;
   renderTiles(s); renderQC(j.qc);
-  $("#stains").src = j.overlays.stains; $("#dl-cells").href = j.cells_csv || "#"; $("#dl-cells").style.visibility = j.cells_csv ? "visible" : "hidden";
+  $("#st-orig").src = j.original; $("#st-hema").src = j.overlays.hematoxylin; $("#st-dab").src = j.overlays.dab;
+  $("#dl-st-orig").href = j.original; $("#dl-st-orig").download = s.image + "_original.png";
+  $("#dl-st-hema").href = j.overlays.hematoxylin; $("#dl-st-hema").download = s.image + "_hematoxylin.png";
+  $("#dl-st-dab").href = j.overlays.dab; $("#dl-st-dab").download = s.image + "_dab.png";
+
+  $("#dl-cells").href = j.cells_csv || "#"; $("#dl-cells").style.visibility = j.cells_csv ? "visible" : "hidden";
   $("#truth").textContent = j.truth ? `Synthetic field — truth: H = ${j.truth.h_score}, ${j.truth.pct_positive}% positive, ${j.truth.n_cells} nuclei.` : (j.note || "");
   $("#group").value = s.group || ""; $("#reanalyze").disabled = false;
   $("#dl-orig").href = j.original; $("#dl-orig").download = s.image + "_original.png";
@@ -106,8 +111,11 @@ const cv = $("#cv"), ctx = cv.getContext("2d"), viewer = $("#viewer"), tip = $("
 function loadImg(src) { return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; }); }
 async function loadImages(j) { const [o, c, p] = await Promise.all([loadImg(j.original), loadImg(j.overlays.cells || j.original), loadImg(j.overlays.positivity)]); state.imgs = { original: o, cells: c, positivity: p, cap: c.height - o.height }; }
 function fitView() { const r = viewer.getBoundingClientRect(); cv.width = Math.round(r.width * devicePixelRatio); cv.height = Math.round(r.height * devicePixelRatio); const im = state.imgs.original; if (!im) return; state.base = Math.min(cv.width / im.width, cv.height / im.height); state.zoom = 1; state.pan = { x: (cv.width - im.width * state.base) / 2, y: (cv.height - im.height * state.base) / 2 }; }
+function clampPan() { const im = state.imgs.original; if (!im) return; const sc = state.base * state.zoom, w = im.width * sc, h = im.height * sc;
+  if (w <= cv.width) state.pan.x = (cv.width - w) / 2; else state.pan.x = Math.min(0, Math.max(cv.width - w, state.pan.x));
+  if (h <= cv.height) state.pan.y = (cv.height - h) / 2; else state.pan.y = Math.min(0, Math.max(cv.height - h, state.pan.y)); }
 function drawViewer() {
-  const im = state.imgs.original; if (!im) return; const sc = state.base * state.zoom;
+  const im = state.imgs.original; if (!im) return; clampPan(); const sc = state.base * state.zoom;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = css("--bg2"); ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.imageSmoothingEnabled = sc < 2;
   ctx.setTransform(sc, 0, 0, sc, state.pan.x, state.pan.y);
@@ -119,7 +127,7 @@ function drawViewer() {
 $$("#layers button").forEach(b => b.onclick = () => setLayer(b.dataset.layer));
 function setLayer(l) { state.layer = l; $$("#layers button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.layer === l))); drawViewer(); }
 $("#opacity").oninput = drawViewer; $("#fit").onclick = () => { fitView(); drawViewer(); };
-viewer.addEventListener("wheel", e => { e.preventDefault(); const r = cv.getBoundingClientRect(); const mx = (e.clientX - r.left) * devicePixelRatio, my = (e.clientY - r.top) * devicePixelRatio; const f = Math.exp(-e.deltaY * 0.0015); const nz = Math.min(12, Math.max(0.5, state.zoom * f)); const k = nz / state.zoom; state.pan.x = mx - (mx - state.pan.x) * k; state.pan.y = my - (my - state.pan.y) * k; state.zoom = nz; drawViewer(); }, { passive: false });
+viewer.addEventListener("wheel", e => { e.preventDefault(); const r = cv.getBoundingClientRect(); const mx = (e.clientX - r.left) * devicePixelRatio, my = (e.clientY - r.top) * devicePixelRatio; const f = Math.exp(-e.deltaY * 0.0015); const nz = Math.min(12, Math.max(1, state.zoom * f)); const k = nz / state.zoom; state.pan.x = mx - (mx - state.pan.x) * k; state.pan.y = my - (my - state.pan.y) * k; state.zoom = nz; if (nz === 1) fitView(); drawViewer(); }, { passive: false });
 let drag = null; viewer.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, px: state.pan.x, py: state.pan.y }; viewer.setPointerCapture(e.pointerId); });
 viewer.addEventListener("pointerup", () => drag = null);
 viewer.addEventListener("pointermove", e => {

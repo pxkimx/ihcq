@@ -134,6 +134,9 @@ def write_overlays(rgb: np.ndarray, res: Result, out_dir, stem: str) -> dict:
     p = out_dir / f"{stem}_positivity.png"; ov.save(ov.with_caption(pm, cap), p); paths["positivity"] = p
     sp = ov.stain_panels(rgb, res.conc, res.matrix, res.white)
     p = out_dir / f"{stem}_stains.png"; ov.save(ov.with_caption(sp, f"{stem}  original | hematoxylin | DAB"), p); paths["stains"] = p
+    from .stains import reconstruct
+    p = out_dir / f"{stem}_hematoxylin.png"; ov.save(reconstruct(res.conc, res.matrix, 0, res.white), p); paths["hematoxylin"] = p
+    p = out_dir / f"{stem}_dab.png"; ov.save(reconstruct(res.conc, res.matrix, 1, res.white), p); paths["dab"] = p
     return paths
 
 
