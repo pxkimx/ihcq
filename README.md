@@ -13,8 +13,38 @@ watershed; StarDist can be dropped in for crowded or irregular tissue.
 ```bash
 pip install -e .            # core: numpy, scipy, scikit-image, pandas, pillow
 pip install -e '.[wsi]'     # + tifffile for pyramidal / whole-slide TIFF
-pip install -e '.[dl]'      # + StarDist nucleus segmentation (needs TensorFlow)
 ```
+
+**StarDist backend — use a separate environment.** TensorFlow drags in
+NumPy 2 and a Keras build that segfaults next to packages compiled against
+NumPy 1.x, which is what a typical Anaconda base carries. Don't install it
+into base; give it its own env:
+
+```bash
+conda create -n ihcq-dl python=3.12
+conda run -n ihcq-dl pip install "numpy>=2,<2.3" scipy scikit-image pandas pillow tifffile "tensorflow>=2.16" stardist
+conda run -n ihcq-dl pip install -e . --no-deps
+conda run -n ihcq-dl ihcq score fields/*.png --backend stardist -o results.csv
+```
+
+The classical backend needs none of this and runs anywhere the core installs.
+
+## The desktop app
+
+```bash
+ihcq app                    # opens http://127.0.0.1:8765 in your browser
+```
+
+Drop images, set the compartment, pixel size and cut points, and read the
+scores with the three QC overlays; every image scored in a session goes into
+one downloadable CSV. Nothing leaves the machine — it is a local server on
+the loopback interface with no dependencies beyond ihcq itself.
+
+`IHCQ.app` (built by `scripts/build_app.sh`, or already on the Desktop) is a
+double-clickable launcher for the same thing. It uses the `ihcq-dl`
+environment when it exists, so the StarDist backend is available in the
+menu; otherwise it uses the base Python and the classical backend. Logs go
+to `~/Library/Logs/ihcq.log`; the *Quit* button in the page stops the server.
 
 ## Sixty-second tour
 
