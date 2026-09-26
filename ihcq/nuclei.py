@@ -106,14 +106,26 @@ def _median_radius(labels: np.ndarray, min_solidity: float = 0.9) -> float | Non
     return float(np.sqrt(med / np.pi))
 
 
+_STARDIST_MODEL = None
+
+
 def segment_stardist(rgb: np.ndarray, cfg: Config) -> np.ndarray:
+    """Pretrained StarDist `2D_versatile_he` (trained on H&E; transfers well to
+    hematoxylin-counterstained IHC).  The model is loaded once per process and
+    large images are tiled automatically."""
+    global _STARDIST_MODEL
     try:
         from stardist.models import StarDist2D
         from csbdeep.utils import normalize
     except ImportError as e:
         raise RuntimeError("StarDist backend requested but not installed: pip install 'ihcq[dl]'") from e
-    model = StarDist2D.from_pretrained("2D_versatile_he")
-    labels, _ = model.predict_instances(normalize(rgb, 1, 99.8, axis=(0, 1)))
+    if _STARDIST_MODEL is None:
+        _STARDIST_MODEL = StarDist2D.from_pretrained("2D_versatile_he")
+    model = _STARDIST_MODEL
+    img = normalize(rgb.astype(np.float32), 1, 99.8, axis=(0, 1))
+    n_tiles = model._guess_n_tiles(img)
+    labels, _ = model.predict_instances(img, n_tiles=n_tiles, prob_thresh=cfg.stardist_prob, nms_thresh=cfg.stardist_nms,
+                                        verbose=False, show_tile_progress=False)
     return filter_by_area(labels.astype(np.int32), cfg.nucleus_min_area_px, cfg.nucleus_max_area_px)
 
 
@@ -173,7 +185,11 @@ def assumed_radius(cfg: Config) -> int:
 
 def segment_nuclei(rgb: np.ndarray, conc: np.ndarray, tissue: np.ndarray, cfg: Config) -> np.ndarray:
     if cfg.backend == "stardist":
-        return segment_stardist(rgb, cfg)
+        labels = segment_stardist(rgb, cfg)
+        labels = np.where(tissue, labels, 0).astype(np.int32)
+        # the H&E model can skip a nucleus that is solid brown; same rescue as the classical path
+        labels = rescue_dab_nuclei(labels, conc[..., 1], tissue, cfg, od_floor=cfg.thresholds.strong)
+        return drop_debris(labels)
     chan = segmentation_channel(conc, rgb, cfg.segment_on)
     exclude = (conc[..., 1] >= cfg.thresholds.weak) if cfg.segment_on in ("auto", "hema") else None
     # Nuclear radius: given, or from pixel size (a typical nucleus is ~4 µm

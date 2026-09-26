@@ -179,6 +179,11 @@ def main(argv=None):
     d.add_argument("--cells", type=int, default=400)
     d.set_defaults(func=cmd_demo)
 
+    ap = sub.add_parser("app", help="open the local desktop UI in your browser")
+    ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--port", type=int, default=8765)
+    ap.set_defaults(func=lambda a: __import__("ihcq.app", fromlist=["main"]).main(open_browser=not a.no_browser, port=a.port))
+
     a = p.parse_args(argv)
     a.func(a)
 

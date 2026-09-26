@@ -21,8 +21,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ihcq import Config, analyze
 from ihcq.calibrate import fit_to_scores
 
-ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else "data/public/deepliif_val/BC-DeepLIIF_Validation_Set")
-OUT = Path("results/deepliif_eval"); OUT.mkdir(parents=True, exist_ok=True)
+import argparse
+ap = argparse.ArgumentParser()
+ap.add_argument("root", nargs="?", default="data/public/deepliif_val/BC-DeepLIIF_Validation_Set")
+ap.add_argument("--backend", default="watershed", choices=["watershed", "stardist"])
+ap.add_argument("--radius", type=int)
+args = ap.parse_args()
+ROOT = Path(args.root)
+OUT = Path("results/deepliif_eval") / args.backend; OUT.mkdir(parents=True, exist_ok=True)
 TOL = 10.0
 
 
@@ -80,7 +86,7 @@ def evaluate(cfg, files, cache):
 
 
 files = sorted(glob.glob(str(ROOT / "*.png")))
-cfg0 = Config()
+cfg0 = Config(backend=args.backend, nucleus_radius_px=args.radius)
 cache = {}
 df0, s0 = evaluate(cfg0, files, cache)
 print("== default thresholds, all fields ==")

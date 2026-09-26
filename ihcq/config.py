@@ -46,6 +46,8 @@ class Config:
     nucleus_radius_px: Optional[int] = None       # typical nuclear radius in px; None → from mpp or estimated
     nucleus_od_threshold: Optional[float] = None  # None → Otsu on the segmentation channel
     backend: str = "watershed"                    # watershed | stardist
+    stardist_prob: Optional[float] = None         # None → model default (0.69 for 2D_versatile_he)
+    stardist_nms: Optional[float] = None          # None → model default (0.3)
     # scoring
     compartment: str = "nuclear"                  # nuclear | membrane | cytoplasm
     ring_px: int = 3                              # ring width for membrane/cytoplasm compartments
