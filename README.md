@@ -85,6 +85,14 @@ interface; nothing leaves the machine. What it does:
   a methods page.
 - **Calibrate** — mark scored images as negative / 1+ / 2+ / 3+ controls,
   fit the cut points, apply them to everything scored so far.
+- **Projects** — *Save project* writes one `.ihcq` file with every
+  original, its segmentation settings, cut points, regions, classifier
+  clicks and group; *Open…* replays the analysis and confirms the numbers
+  reproduce exactly (tested across a restart).
+- **Tumour classifier** — *Teach tumour* / *Teach stroma* clicks,
+  *Classify*, the *Tumour map* layer and the *Score tumour cells only*
+  switch.
+- **Whole slides** — drop an `.svs` / pyramidal TIFF; progress per tile.
 
 The launcher uses `.venv-dl` when it exists (hybrid and StarDist finders
 available in the menu); otherwise the base Python and the classical finder.
@@ -267,6 +275,80 @@ distinction, so percentages are over *all* cells and stroma dilutes them
 (an ASCO/CAP score is over tumour cells); and it cannot separate label
 noise from scoring error without slide identifiers, which BCI does not
 publish.
+
+### HER2 scoring by membrane completeness (ASCO/CAP)
+
+With the membrane compartment, every cell also gets a **membrane
+completeness**: its territory (nearest-nucleus region out to ~1.2 nuclear
+radii) is cut into 24 angular sectors around the nucleus, each sector's
+peak DAB is read, and completeness is the fraction of sectors that reach
+the weak cut. Cells are called complete (≥80 % of sectors), incomplete or
+unstained, with a membrane intensity. The field gets a HER2 score and the
+2023 category — 3+ (>10 % complete intense), 2+ equivocal, 1+ HER2-low,
+0 ultralow / null — over tumour cells when the tumour classifier is on.
+
+Validated on BCI's 977 held-out patches (`scripts/her2_bci.py`, fit on
+even patches, tested on odd):
+
+| method | balanced accuracy | exact | HER2-neg vs pos |
+|---|---|---|---|
+| completeness, ASCO-faithful default cuts | 0.42 | 0.38 | 0.54 |
+| completeness, fitted (preset *HER2 · BCI-calibrated*) | 0.45 | 0.42 | 0.62 |
+| earlier ring-intensity method, fitted | 0.48 | 0.43 | 0.60 |
+
+The two methods tie; BCI's slide-level labels on patches (many without
+tumour) cap any patch-level method near here. Completeness wins on
+interpretability — every call can be checked cell by cell. The fitted
+"strong" cut is 0.30 OD, far below the 0.80 default, which is the
+scanner-calibration lesson again: **calibrate on your own controls.**
+
+Three segmentation changes were needed for membrane markers, each found on
+real fields: the quenched-nucleus rescue now runs only for nuclear markers
+(it turned whole brown cells into "nuclei"); the per-image DAB→hematoxylin
+leak is measured in pure-DAB pixels and subtracted before nuclei are found
+(zero on well-matched slides, 0.08–0.13 on the user's scanner); and pale
+cells whose cytoplasm cleared the nuclear threshold are re-thresholded to
+their dark core. The colon demo is unchanged by all three.
+
+### Tumour cells: teach it, don't trust it blind
+
+ASCO/CAP and most IHC scores count tumour cells only. A DAB-free automatic
+tumour/stroma split from nuclear size, shape, hematoxylin and crowding was
+built and **rejected**: on the colon demo it called 70 % of epithelium and
+39 % of stroma "tumour", and on an infiltrating breast field it barely beat
+chance. With labels, the same features separate at 82–85 % balanced
+accuracy, so IHCq uses a **per-image classifier you teach**: click a few
+tumour and stromal nuclei (*Teach tumour / Teach stroma*, then *Classify*),
+and a shrinkage LDA on seven DAB-free features classifies the rest, with
+leave-one-out accuracy on your clicks reported so you know when to add
+more. The classifier never looks at DAB, so it cannot bias the score it
+gates. Clicks are saved in projects.
+
+### Whole-slide images
+
+`ihcq slide file.svs` — or drop the file in the app — reads Aperio SVS,
+NDPI-style tiled TIFF and OME-TIFF by decoding only the tiles each region
+needs (no zarr, no loading the slide), skips tissue-free tiles, analyzes
+2048-px tiles in parallel with an overlap margin, keeps each cell only in
+the tile that owns its centroid, and aggregates pixel statistics. Pixel
+size is read from the file (Aperio `MPP`, OME `PhysicalSizeX`, or the
+resolution tags). A 46-megapixel test slide takes ~30 s on 8 cores; the
+tiled result matches direct analysis of the same pixels within 0.2 % of
+nuclei (tested). In the app a slide streams to disk, shows tile progress,
+and opens on an overview; cut points and regions work per cell.
+
+### The white point: small numbers, large effects
+
+Moving the white point by one or two grey levels per channel changed
+nucleus count by ~9 % and positivity by ~2.5 points on a pale field,
+because the channels shift unequally and deconvolution reads the cast as
+stain. The estimator is now the **median of the brightest neutral
+cluster** (clean glass), not a 99.5th percentile, which landed on noise
+highlights and depended on how much glass was in view. It is also the only
+choice that gives a slide and a field cut from it the same answer. On
+DeepLIIF it is a wash (index MAE 5.3 → 6.1 pp, r 0.972 → 0.978). On pale
+tissue, set the white point with the glass eyedropper and save it in your
+profile.
 
 ### Stain vectors: textbook beats fitted here
 

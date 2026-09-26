@@ -59,7 +59,7 @@
         <option value="nuclear">Nuclear marker · Ki-67, ER, PR, p53</option>
         <option value="membrane">Membrane marker · HER2, PD-L1, EGFR</option>
         <option value="cyto">Cytoplasmic marker · diffuse</option>
-        <option value="pale">Pale scanner (BCI-calibrated cut points)</option>
+        <option value="her2">HER2 · ASCO/CAP completeness, BCI-calibrated cut points</option>
         <option value="pixels">Pixel-only · stroma, ECM, secreted</option>
       </select>
       <details class="adv" open>
@@ -302,6 +302,11 @@
 </main>
 
 <div class="toast" id="toast" hidden></div>
-<script src="/static/app.js"></script>
+<script src="/static/app-core.js"></script>
+<script src="/static/app-upload.js"></script>
+<script src="/static/app-tools.js"></script>
+<script src="/static/app-results.js"></script>
+<script src="/static/app-viewer.js"></script>
+<script src="/static/app-session.js"></script>
 </body>
 </html>
