@@ -64,7 +64,7 @@ def make_field(n_cells=400, fractions=(0.4, 0.2, 0.25, 0.15), size=(768, 1024), 
         h_od = rng.uniform(0.55, 0.85)
         # strong DAB quenches the counterstain: the classic reason hematoxylin-only
         # segmentation loses positive nuclei
-        h_od *= 1.0 - 0.6 * min(d_od / 1.2, 1.0)
+        h_od *= 1.0 - 0.4 * min(d_od / 1.2, 1.0)
         hema[m] = h_od
         dab[m] = d_od
         truth_dab[m] = d_od

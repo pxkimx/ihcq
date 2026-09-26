@@ -87,37 +87,48 @@ def calibrate(groups: dict, base: Config | None = None, estimate_stains: bool = 
     return cfg.validate(), pd.DataFrame(rows)
 
 
-def fit_to_scores(scored: pd.DataFrame, base: Config | None = None, name: str = "fitted",
-                  grid_step: float = 0.05, image_root=None) -> tuple[Config, pd.DataFrame]:
-    """Fit thresholds so computed H-scores agree with pathologist H-scores.
+def _predict(cells_od: list, th: Thresholds, target: str) -> np.ndarray:
+    if target == "h_score":
+        return np.array([h_score(bin_intensity(c, th)) if c.size else np.nan for c in cells_od])
+    return np.array([(bin_intensity(c, th) > 0).mean() * 100 if c.size else np.nan for c in cells_od])
 
-    `scored` needs columns `image` (path) and `h_score` (0–300).  Per-cell OD
-    is computed once per image; then every (weak, moderate, strong) triple on
-    a grid is evaluated and the one with the lowest mean absolute error wins.
-    Returns the config and a per-image table of pathologist vs fitted scores.
+
+def fit_to_scores(scored: pd.DataFrame, base: Config | None = None, name: str = "fitted",
+                  grid_step: float = 0.05, image_root=None, target: str | None = None,
+                  cells_od: list | None = None) -> tuple[Config, pd.DataFrame]:
+    """Fit thresholds so computed scores agree with reference scores.
+
+    `scored` needs `image` (path) plus either `h_score` (0–300) — all three
+    cuts are fitted — or `pct_positive` (0–100, e.g. a Ki-67 index) — only
+    the 0/1+ cut is fitted, the upper cuts keep the base config's values.
+    Per-cell OD is computed once per image (or passed in via `cells_od`),
+    then the grid is searched for the lowest mean absolute error.
     """
     cfg = Config.from_dict((base or Config()).to_dict())
+    target = target or ("h_score" if "h_score" in scored.columns else "pct_positive")
     root = Path(image_root) if image_root else Path(".")
-    cells, target = [], []
-    for _, r in scored.iterrows():
-        p = Path(r["image"]); p = p if p.is_absolute() else root / p
-        res = analyze(load_image(p), cfg)
-        cells.append(res.cells["dab_od"].to_numpy() if len(res.cells) else np.array([]))
-        target.append(float(r["h_score"]))
-    target = np.asarray(target)
+    if cells_od is None:
+        cells_od = []
+        for _, r in scored.iterrows():
+            p = Path(r["image"]); p = p if p.is_absolute() else root / p
+            res = analyze(load_image(p), cfg)
+            cells_od.append(res.cells["dab_od"].to_numpy() if len(res.cells) else np.array([]))
+    ref = scored[target].to_numpy(dtype=float)
     grid = np.round(np.arange(0.05, 1.6, grid_step), 3)
+    if target == "h_score":
+        triples = [(w, m, s) for w, m, s in product(grid, grid, grid) if w < m < s]
+    else:
+        m0, s0 = cfg.thresholds.moderate, cfg.thresholds.strong
+        triples = [(w, max(m0, w + 0.05), max(s0, w + 0.10)) for w in grid]
     best, best_err = None, np.inf
-    for w, m, s in product(grid, grid, grid):
-        if not (w < m < s):
-            continue
+    for w, m, s in triples:
         th = Thresholds(w, m, s)
-        pred = np.array([h_score(bin_intensity(c, th)) if c.size else np.nan for c in cells])
-        err = np.nanmean(np.abs(pred - target))
+        err = np.nanmean(np.abs(_predict(cells_od, th, target) - ref))
         if err < best_err:
             best, best_err = th, err
     cfg.thresholds = best
     cfg.profile_name = name
-    pred = np.array([h_score(bin_intensity(c, best)) if c.size else np.nan for c in cells])
-    table = pd.DataFrame({"image": scored["image"], "pathologist_h": target, "fitted_h": np.round(pred, 1),
-                          "abs_error": np.round(np.abs(pred - target), 1), "n_cells": [c.size for c in cells]})
+    pred = _predict(cells_od, best, target)
+    table = pd.DataFrame({"image": scored["image"], f"reference_{target}": ref, f"fitted_{target}": np.round(pred, 1),
+                          "abs_error": np.round(np.abs(pred - ref), 1), "n_cells": [c.size for c in cells_od]})
     return cfg.validate(), table

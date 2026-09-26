@@ -44,6 +44,23 @@ the glass in each image, so a dim scan does not read as lightly stained.
 | `allred_ps / _is / _total` | proportion score 0–5 + intensity score 0–3 = 0–8 |
 | `cells_per_mm2`, `positive_cells_per_mm2` | with `--mpp` |
 
+Nuclei are found on the hematoxylin channel after background flattening,
+so faintly counterstained nuclei on a tinted field are still detected; the
+threshold is sampled from DAB-free pixels so chromogen crosstalk cannot push
+pale negative nuclei below the cut; strongly stained nuclei that quenched
+their counterstain are recovered by a shape test on compact DAB blobs. Each
+nucleus is scored on its 1-px-eroded core so the mask's rim of pale membrane
+does not dilute the intensity.
+
+**Tell it the scale.** The nuclear radius sets the background flattening
+and the seed spacing. Pass `--mpp` (microns per pixel, from your scanner —
+the radius is taken as 4 µm) or `--radius` in pixels; otherwise 8 px is
+assumed, which suits 20× at ~0.5 µm/px. It is deliberately *not* estimated
+from the image: every cheap estimator is fooled either by fragmented large
+nuclei or by merged clusters, and a wrong guess silently halves or doubles
+the cell count. The summary reports `median_nucleus_radius_px` next to the
+assumed value and flags a gross mismatch.
+
 The **compartment** is where DAB is read for each cell: `nuclear` (Ki-67, ER,
 PR, p53), `membrane` (a ring outside the nucleus — HER2, PD-L1, EGFR) or
 `cytoplasm` (a wider band). The per-cell summary statistic is the mean by
@@ -93,6 +110,37 @@ This searches cut-point triples for the best agreement with the pathologist's
 H-scores and prints the per-slide residuals. Fit on one set of slides,
 validate on another — never the same ones.
 
+## How well does it work? (public data)
+
+Evaluated against the **DeepLIIF** breast-cancer Ki-67 validation set
+(Ghahremani et al. 2022, CC-BY 4.0; `scripts/eval_deepliif.py`): 66 fields
+at 40×, six distinct tissue regions with flipped/rotated copies, each with a
+nucleus mask marking positive and negative cells derived from *multiplex
+immunofluorescence* — an independent modality, not a re-reading of the DAB.
+Default settings, no calibration, no training:
+
+| metric | value |
+|---|---|
+| nuclei detected vs truth | 10,919 vs 9,141 |
+| detection recall / precision (centroid within 10 px) | 0.77 / 0.65 |
+| positive-vs-negative agreement on matched nuclei | 96.1 % |
+| Ki-67 index, mean absolute error | 5.3 percentage points |
+| Ki-67 index, Pearson r across fields | 0.97 |
+
+Per region, truth vs measured Ki-67 index: 6.1 → 5.2 %, 8.5 → 8.3 %,
+13.6 → 19.2 %, 34.7 → 33.4 %, 36.5 → 43.3 %, 48.3 → 65.0 %. The two that
+miss are instructive. Region 40's negative nuclei are ghost-pale and sit in
+heavy brown cytoplasm; the truth there comes from DAPI and includes nuclei
+that are barely visible in the IHC — a recall limit of the classical
+watershed, and the reason the StarDist backend exists. Region 326 has
+nuclei twice the radius of the rest of the set (≈16 px); at the default
+8 px they fragment (125 objects for 34 nuclei), and `--radius 16` brings
+that to 58 — better, not fixed, because those large pale nuclei have
+internal texture that also splits a distance-transform watershed.
+
+Two scikit-image / DeepLIIF sample images with membranous and nuclear
+staining are in `data/public/` and are scored in `results/final/`.
+
 ## QC you get for free
 
 Every scored image can write three PNGs (`--overlays DIR`):
@@ -103,7 +151,10 @@ Every scored image can write three PNGs (`--overlays DIR`):
 
 And every result row carries `qc_flags`: clipped pixels (over-exposed scan),
 too little tissue, too few cells for a stable H-score, chromogen saturation,
-and uncalibrated thresholds.
+uncalibrated thresholds, **no glass in the field** (the white point had to be
+assumed — pass `--white R G B` measured on a blank area of the slide), and a
+**compartment hint** when most DAB+ pixels lie outside the nuclei (a
+membranous or cytoplasmic stain scored as nuclear, or vice versa).
 
 ## Python API
 
@@ -125,8 +176,10 @@ templates.
 
 ## Limits, honestly
 
-- Watershed segmentation is fine for round, well-separated nuclei at 20–40×.
-  Crowded tumour, lymphoid tissue or spindle cells want `--backend stardist`.
+- Watershed segmentation handles round, reasonably counterstained nuclei at
+  20–40×. Crowded tumour, spindle cells, and ghost-pale negatives next to
+  heavy brown cytoplasm lose recall (see the evaluation) — `--backend
+  stardist` is the upgrade path, and the rest of the pipeline is unchanged.
 - Cytoplasmic/membrane compartments are geometric rings around nuclei — an
   approximation, and cells without a visible nucleus are not counted.
 - Whole slides: `load_image(..., max_side=N)` reads a pyramid level, but there

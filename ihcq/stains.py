@@ -49,18 +49,25 @@ def stain_matrix(stains=("hematoxylin", "dab"), vectors=None) -> np.ndarray:
     return m
 
 
-def estimate_white(rgb: np.ndarray, percentile: float = 99.5) -> np.ndarray:
-    """Per-channel illumination reference I0 from the brightest tissue-free pixels.
+def find_white(rgb: np.ndarray, percentile: float = 99.5, default: float = 245.0):
+    """Per-channel illumination reference I0 from bare glass, if the field has any.
 
-    Glass under brightfield is rarely a perfect 255; using the actual white
-    point removes a constant OD offset from every pixel.
+    Glass is bright AND neutral.  Bright tissue (cytoplasm, mucin) is usually
+    tinted, and taking it as "white" would fold that tint into every OD.  A
+    field with no glass returns the default and `found=False`; the right
+    value then is one measured on a blank area of the same slide, passed in
+    as `white_point`.
     """
     flat = rgb.reshape(-1, 3).astype(np.float64)
-    bright = flat[flat.sum(1) > np.percentile(flat.sum(1), 90)]
-    if len(bright) < 50:
-        bright = flat
-    i0 = np.percentile(bright, percentile, axis=0)
-    return np.clip(i0, 200, 255)
+    cand = flat[(flat.min(1) >= 170) & ((flat.max(1) - flat.min(1)) <= 20)]
+    if len(cand) < max(200, 0.005 * len(flat)):
+        return np.full(3, default), False
+    return np.clip(np.percentile(cand, percentile, axis=0), 170, 255), True
+
+
+def estimate_white(rgb: np.ndarray, percentile: float = 99.5) -> np.ndarray:
+    """I0 from glass; falls back to a neutral default when the field has none."""
+    return find_white(rgb, percentile)[0]
 
 
 def rgb_to_od(rgb: np.ndarray, i0=255.0) -> np.ndarray:

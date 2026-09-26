@@ -25,6 +25,10 @@ def _cfg_from_args(a) -> Config:
             setattr(cfg, k, v)
     if getattr(a, "mpp", None):
         cfg.mpp = a.mpp
+    if getattr(a, "white", None):
+        cfg.white_point = [float(v) for v in a.white]
+    if getattr(a, "radius", None):
+        cfg.nucleus_radius_px = int(a.radius)
     if getattr(a, "no_segment", False):
         cfg.segment = False
     if getattr(a, "thresholds", None):
@@ -67,11 +71,12 @@ def cmd_calibrate(a):
             setattr(base, k, getattr(a, k))
     if a.scored:
         scored = pd.read_csv(a.scored)
-        if not {"image", "h_score"} <= set(scored.columns):
-            sys.exit("--scored CSV needs columns: image, h_score")
+        if "image" not in scored.columns or not ({"h_score", "pct_positive"} & set(scored.columns)):
+            sys.exit("--scored CSV needs columns: image and h_score (or pct_positive)")
         cfg, table = fit_to_scores(scored, base, name=Path(a.output).stem, image_root=Path(a.scored).parent)
         print(table.to_string(index=False))
-        print(f"\nmean |error| = {table['abs_error'].mean():.1f} H-score units over {len(table)} images")
+        unit = "H-score units" if "fitted_h_score" in table.columns else "percentage points"
+        print(f"\nmean |error| = {table['abs_error'].mean():.1f} {unit} over {len(table)} images")
     else:
         groups = {c: getattr(a, c) or [] for c in ("negative", "weak", "moderate", "strong")}
         if not any(groups.values()):
@@ -144,9 +149,11 @@ def main(argv=None):
     s.add_argument("--thresholds", nargs=3, type=float, metavar=("WEAK", "MOD", "STRONG"))
     s.add_argument("--compartment", choices=["nuclear", "membrane", "cytoplasm"])
     s.add_argument("--cell-statistic", dest="cell_statistic", choices=["mean", "median", "p90"])
-    s.add_argument("--segment-on", dest="segment_on", choices=["hema", "hema+dab", "gray"])
+    s.add_argument("--segment-on", dest="segment_on", choices=["auto", "hema", "hema+dab", "gray"])
     s.add_argument("--backend", choices=["watershed", "stardist"])
     s.add_argument("--mpp", type=float, help="microns per pixel (enables µm² and per-mm² outputs)")
+    s.add_argument("--white", nargs=3, type=float, metavar=("R", "G", "B"), help="white point measured on bare glass of this slide")
+    s.add_argument("--radius", type=int, help="typical nuclear radius in px (default 8)")
     s.add_argument("--no-segment", action="store_true", help="pixel metrics only")
     s.add_argument("--max-side", type=int, help="for pyramidal TIFFs: read the level near this size")
     s.set_defaults(func=cmd_score)
@@ -154,11 +161,11 @@ def main(argv=None):
     c = sub.add_parser("calibrate", help="fit intensity thresholds from control images")
     for cat in ("negative", "weak", "moderate", "strong"):
         c.add_argument(f"--{cat}", nargs="+")
-    c.add_argument("--scored", help="CSV with columns image,h_score — fit thresholds to pathologist scores")
+    c.add_argument("--scored", help="CSV with columns image,h_score (or image,pct_positive) — fit thresholds to reference scores")
     c.add_argument("-o", "--output", default="profile.json")
     c.add_argument("--profile", help="start from an existing profile")
     c.add_argument("--compartment", choices=["nuclear", "membrane", "cytoplasm"])
-    c.add_argument("--segment-on", dest="segment_on", choices=["hema", "hema+dab", "gray"])
+    c.add_argument("--segment-on", dest="segment_on", choices=["auto", "hema", "hema+dab", "gray"])
     c.add_argument("--estimate-stains", action="store_true", help="also fit stain vectors (Macenko) from the controls")
     c.set_defaults(func=cmd_calibrate)
 

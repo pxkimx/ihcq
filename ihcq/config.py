@@ -39,11 +39,11 @@ class Config:
     tissue_min_size_px: int = 400
     # nuclei
     segment: bool = True
-    segment_on: str = "hema+dab"                  # hema | hema+dab | gray
+    segment_on: str = "auto"                      # auto | hema | hema+dab | gray
     nucleus_min_area_px: int = 20
-    nucleus_max_area_px: int = 2500
+    nucleus_max_area_px: int = 5000
     nucleus_smooth_sigma: float = 1.0
-    nucleus_min_distance_px: int = 5
+    nucleus_radius_px: Optional[int] = None       # typical nuclear radius in px; None → from mpp or estimated
     nucleus_od_threshold: Optional[float] = None  # None → Otsu on the segmentation channel
     backend: str = "watershed"                    # watershed | stardist
     # scoring
@@ -59,8 +59,8 @@ class Config:
 
     def validate(self):
         self.thresholds.validate()
-        if self.segment_on not in ("hema", "hema+dab", "gray"):
-            raise ValueError("segment_on must be hema, hema+dab or gray")
+        if self.segment_on not in ("auto", "hema", "hema+dab", "gray"):
+            raise ValueError("segment_on must be auto, hema, hema+dab or gray")
         if self.compartment not in ("nuclear", "membrane", "cytoplasm"):
             raise ValueError("compartment must be nuclear, membrane or cytoplasm")
         if self.cell_statistic not in ("mean", "median", "p90"):
