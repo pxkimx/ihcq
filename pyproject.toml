@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ihcq"
+version = "0.1.0"
+description = "Reproducible chromogenic IHC quantification: H-score, Allred, positivity area fraction and optical density"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-image>=0.21",
+    "pandas>=2.0",
+    "pillow>=9.5",
+]
+
+[project.optional-dependencies]
+wsi = ["tifffile>=2023.7.10", "zarr>=2.16"]
+dl = ["stardist>=0.9", "tensorflow>=2.13"]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+ihcq = "ihcq.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ihcq*"]
