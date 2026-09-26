@@ -49,9 +49,13 @@ interface; nothing leaves the machine. What it does:
   re-runs the current image when you change compartment, finder, scale or
   statistic. Results as colour-coded tiles, a stain-identity badge, and QC
   flags.
-- **Viewer** — original / labelled nuclei / positivity layers with opacity,
-  scroll-zoom and drag-pan, and hover on any nucleus for its bin, DAB and
-  hematoxylin OD.
+- **Viewer** — original / labelled nuclei / positivity / positive-density
+  heat layers with opacity, scroll-zoom (never below fit) and drag-pan,
+  hover on any nucleus for its bin and ODs, a hotspot marker, and ROI
+  include/exclude polygons with *Score inside ROI*.
+- **Cell table** — every nucleus with bin, DAB and hematoxylin OD, area and
+  position; sortable, filterable by bin, and clicking a row flies the viewer
+  to that nucleus.
 - **Live cut points** — a per-cell DAB histogram with three draggable cut
   points; H-score, % positive, Allred and the bin composition update as you
   drag; *Apply* re-bins the image and its overlays.
@@ -90,6 +94,9 @@ the glass in each image, so a dim scan does not read as lightly stained.
 | `pct_positive`, `pct_1plus` … | share of cells in each bin |
 | `h_score` | 1·%1+ + 2·%2+ + 3·%3+, range 0–300 |
 | `allred_ps / _is / _total` | proportion score 0–5 + intensity score 0–3 = 0–8 |
+| `irs_ps / _is / irs` | Remmele–Stegner immunoreactive score: proportion 0–3 × intensity 0–3 = 0–12 |
+| `pct_positive_ci95` | Wilson 95 % interval on % positive — the counting uncertainty (18 % of 150 cells is 12–25 %) |
+| `hotspot_pct_positive`, `coldspot_…`, `hotspot_xy` | highest / lowest positive fraction among neighbourhoods of the nearest *k* cells (k = min(500, ¼ of the cells)); the IKWG hotspot counts ≥500 |
 | `cells_per_mm2`, `positive_cells_per_mm2` | with `--mpp` |
 
 Nuclei are found on the hematoxylin channel after background flattening,
@@ -110,8 +117,9 @@ the cell count. The summary reports `median_nucleus_radius_px` next to the
 assumed value and flags a gross mismatch.
 
 The **compartment** is where DAB is read for each cell: `nuclear` (Ki-67, ER,
-PR, p53), `membrane` (a ring outside the nucleus — HER2, PD-L1, EGFR) or
-`cytoplasm` (a wider band). The per-cell summary statistic is the mean by
+PR, p53), `membrane` (a ring outside the nucleus — HER2, PD-L1, EGFR),
+`cytoplasm` (a wider band) or `cell` (nucleus plus band — QuPath's "Cell"
+compartment, which QuPath recommends for diffuse cytoplasmic staining). The per-cell summary statistic is the mean by
 default; `p90` is more faithful for punctate or membranous staining.
 
 ### Pixel level (no nuclei needed, `--no-segment` for stroma, ECM, secreted markers)
@@ -121,6 +129,7 @@ default; `p90` is more faithful for punctate or membranous staining.
 | `dab_area_fraction_pct` | tissue pixels with DAB OD ≥ weak cut ÷ all tissue pixels |
 | `pct_px_1plus` … | tissue pixels in each intensity bin |
 | `pixel_h_score` | same arithmetic as H-score, over pixels instead of cells |
+| `profiler_zone` | four-tier pixel call in the spirit of IHC Profiler (Varghese 2014): the intensity zone holding most stained pixels |
 | `mean_dab_od_tissue`, `mean_dab_od_positive`, `p95_dab_od_tissue` | intensity |
 | `integrated_dab_od` | Σ DAB OD over tissue — proportional to total chromogen |
 | `tissue_area_mm2`, `dab_area_mm2` | with `--mpp` |
@@ -245,6 +254,26 @@ distinction, so percentages are over *all* cells and stroma dilutes them
 (an ASCO/CAP score is over tumour cells); and it cannot separate label
 noise from scoring error without slide identifiers, which BCI does not
 publish.
+
+### Stain vectors: textbook beats fitted here
+
+`--fit-stains` fits the two stain vectors to each image (Macenko) instead of
+using the textbook values. On DeepLIIF it *ranks* fields better (r 0.972 →
+0.987) but shifts the OD scale, so the cut points no longer mean the same
+thing: Ki-67 index error rises from 5.3 to 11.0 pp, and even with the cut
+point refitted on half the fields the held-out error is 7.5 pp against
+4.6 pp for textbook vectors with default cuts. It stays off by default; use
+it only where brown visibly bleeds into the hematoxylin panel, and
+recalibrate afterwards.
+
+### Scoring inside a region
+
+Every serious IHC workflow scores tumour, not the whole field. In the app,
+draw include (＋ ROI) and exclude (－ Exclude) polygons on the viewer; cells
+count by centroid, pixels by mask, and every ROI and re-bin is derived from
+the full-field result rather than from the previous one. On the colon demo:
+full field 64.7 % positive (H 145); one epithelial nest 93 % (H 200); pure
+stroma 0 %.
 
 ### Handing it the wrong stain (H&E)
 

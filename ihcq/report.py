@@ -9,8 +9,8 @@ import numpy as np
 import pandas as pd
 
 BIN_COL = {0: "#4f83ff", 1: "#f6c945", 2: "#ff8b3d", 3: "#ff4d5e"}
-METRICS = [("h_score", "H-score"), ("pct_positive", "% positive cells"), ("allred_total", "Allred"),
-           ("dab_area_fraction_pct", "DAB area %"), ("mean_dab_od_tissue", "mean DAB OD"), ("n_cells", "nuclei")]
+METRICS = [("h_score", "H-score"), ("pct_positive", "% positive cells"), ("allred_total", "Allred"), ("irs", "IRS"),
+           ("hotspot_pct_positive", "hotspot %"), ("dab_area_fraction_pct", "DAB area %"), ("mean_dab_od_tissue", "mean DAB OD"), ("n_cells", "nuclei")]
 
 
 def build_report(assets: list, rows: list, stats: dict | None, out_path, title="IHCq report"):
@@ -29,7 +29,7 @@ def build_report(assets: list, rows: list, stats: dict | None, out_path, title="
         cols = [c for c, _ in METRICS if c in df.columns]
         show = df[["image"] + cols + [c for c in ("group", "second_stain", "thr_weak", "thr_moderate", "thr_strong") if c in df.columns]].copy()
         for c in cols:
-            show[c] = show[c].map(lambda v: "—" if pd.isna(v) else (f"{v:.0f}" if c in ("n_cells", "allred_total") else f"{v:.2f}" if c == "mean_dab_od_tissue" else f"{v:.1f}"))
+            show[c] = show[c].map(lambda v, c=c: "—" if pd.isna(v) else (f"{v:.0f}" if c in ("n_cells", "allred_total", "irs") else f"{v:.2f}" if c == "mean_dab_od_tissue" else f"{v:.1f}"))
         ax = fig.add_axes([0.03, 0.08, 0.94, 0.78]); ax.axis("off")
         tbl = ax.table(cellText=show.values.tolist(), colLabels=[dict(METRICS).get(c, c) for c in show.columns], loc="upper center", cellLoc="center")
         tbl.auto_set_font_size(False); tbl.set_fontsize(7); tbl.scale(1, 1.25); tbl.auto_set_column_width(list(range(len(show.columns))))
@@ -55,11 +55,14 @@ def build_report(assets: list, rows: list, stats: dict | None, out_path, title="
                 ax.imshow(im); ax.set_title(cap, fontsize=8, loc="left"); ax.axis("off")
             # metrics + histogram
             ax = fig.add_axes([0.52, 0.155, 0.44, 0.14]); ax.axis("off")
-            lines = [f"H-score {s.get('h_score', '—')}    positive {s.get('pct_positive', '—')} %    Allred {s.get('allred_total', '—')}    nuclei {s.get('n_cells', '—')}",
+            ci = s.get("pct_positive_ci95")
+            lines = [f"H-score {s.get('h_score', '—')}    positive {s.get('pct_positive', '—')} %" + (f" (95% CI {ci[0]}–{ci[1]})" if ci else "") + f"    nuclei {s.get('n_cells', '—')}",
+                     f"Allred {s.get('allred_total', '—')}    IRS {s.get('irs', '—')}/12    hotspot {s.get('hotspot_pct_positive', '—')} % ({s.get('hotspot_window', '—')}-cell window)    profiler zone {s.get('profiler_zone', '—')}",
                      f"1+ {s.get('pct_1plus', '—')} %   2+ {s.get('pct_2plus', '—')} %   3+ {s.get('pct_3plus', '—')} %",
                      f"DAB area {s.get('dab_area_fraction_pct', '—')} %    mean DAB OD {s.get('mean_dab_od_tissue', '—')}    p95 {s.get('p95_dab_od_tissue', '—')}",
                      f"tissue {round((s.get('tissue_fraction') or 0) * 100)} % of field    white point {s.get('white_point_source')}    median nucleus r {s.get('median_nucleus_radius_px')} px"]
             if s.get("group"): lines.insert(0, f"group: {s['group']}")
+            if s.get("roi_fraction") is not None: lines.insert(0, f"scored inside a drawn ROI — {round(s['roi_fraction'] * 100)} % of the tissue")
             ax.text(0, 1, "\n".join(lines), fontsize=7.5, va="top", family="monospace", linespacing=1.4)
             flags = a.get("qc") or []
             if flags:
@@ -101,7 +104,8 @@ def build_report(assets: list, rows: list, stats: dict | None, out_path, title="
                   "by colour deconvolution (Ruifrok & Johnston 2001). Tissue was defined as the smoothed total-OD footprint with holes filled. Nuclei were found on the "
                   "background-flattened hematoxylin channel by a distance-transform watershed (optionally StarDist), with strongly stained nuclei recovered by a shape test on compact DAB blobs. "
                   "Each nucleus was scored on its eroded core (nuclear) or on a ring outside it (membrane/cytoplasm) by the chosen per-cell statistic of DAB OD, and binned at the stated cut points. "
-                  "H-score = Σ(bin × % cells); Allred = proportion score (0–5) + intensity score (0–3); DAB area = tissue pixels above the 0/1+ cut. "
+                  "H-score = Σ(bin × % cells); Allred = proportion score (0–5) + intensity score (0–3); IRS (Remmele–Stegner) = proportion score (0–3) × intensity score (0–3); "
+                  "the 95 % confidence interval on % positive is the Wilson score interval; the hotspot is the highest positive fraction among neighbourhoods of the stated number of nearest cells; DAB area = tissue pixels above the 0/1+ cut. "
                   "The second stain of every image was identified from its fitted stain vector; fields whose second stain is eosin (H&E) carry invalid DAB scores. "
                   "Between-group tests: two groups — Welch t-test and Mann–Whitney U; more — one-way ANOVA and Kruskal–Wallis. Software: IHCq (local, open source).")
         fig.text(0.05, 0.88, textwrap.fill(method, 150), fontsize=8.5, va="top", linespacing=1.5)

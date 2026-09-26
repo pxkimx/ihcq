@@ -258,7 +258,8 @@ def drop_debris(labels: np.ndarray, frac: float = 0.25, min_count: int = 30) -> 
 def compartment_masks(labels: np.ndarray, compartment: str, ring_px: int) -> np.ndarray:
     """Return a label image for the region each cell is scored in.
 
-    nuclear   → the nucleus itself
+    nuclear   → the nucleus itself (1-px eroded core)
+    cell      → whole nucleus plus a cytoplasm band (QuPath's "Cell"; diffuse staining)
     membrane  → a ring `ring_px` wide immediately outside the nucleus
     cytoplasm → a wider band outside the nucleus (2× ring), stopping at neighbours
     Rings are assigned to the nearest nucleus so adjacent cells don't share
@@ -274,6 +275,10 @@ def compartment_masks(labels: np.ndarray, compartment: str, ring_px: int) -> np.
         core = np.where(ndi.binary_erosion(labels > 0), labels, 0)
         kept = np.bincount(core.ravel(), minlength=labels.max() + 1) > 0
         return np.where(kept[labels], core, labels).astype(np.int32)
+    if compartment == "cell":
+        # QuPath's "Cell" compartment: the whole nucleus plus a cytoplasm band
+        band = compartment_masks(labels, "cytoplasm", ring_px)
+        return np.where(labels > 0, labels, band).astype(np.int32)
     width = ring_px if compartment == "membrane" else 2 * ring_px
     dist, (iy, ix) = ndi.distance_transform_edt(labels == 0, return_indices=True)
     nearest = labels[iy, ix]

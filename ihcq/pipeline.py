@@ -48,7 +48,7 @@ def _qc_flags(summary: dict, cfg: Config) -> list:
     f = summary.get("dab_in_nuclei_fraction")
     if f is not None and cfg.compartment == "nuclear" and f < 0.35 and summary.get("dab_area_fraction_pct", 0) > 2:
         flags.append(f"only {f*100:.0f}% of DAB+ pixels lie inside nuclei — a membranous/cytoplasmic stain? try --compartment membrane")
-    if f is not None and cfg.compartment != "nuclear" and f > 0.75:
+    if f is not None and cfg.compartment in ("membrane", "cytoplasm") and f > 0.75:
         flags.append(f"{f*100:.0f}% of DAB+ pixels lie inside nuclei — a nuclear stain scored in a {cfg.compartment} ring")
     r_est, r_used = summary.get("median_nucleus_radius_px"), summary.get("assumed_nucleus_radius_px")
     if r_est and r_used and (r_est < 0.55 * r_used or r_est > 1.8 * r_used):

@@ -26,10 +26,11 @@ ap = argparse.ArgumentParser()
 ap.add_argument("root", nargs="?", default="data/public/deepliif_val/BC-DeepLIIF_Validation_Set")
 ap.add_argument("--backend", default="watershed", choices=["watershed", "stardist", "hybrid"])
 ap.add_argument("--radius", type=int)
+ap.add_argument("--fit-stains", dest="fit_stains", action="store_true")
 ap.add_argument("--prob", type=float, help="StarDist detection probability threshold (model default ≈0.69)")
 args = ap.parse_args()
 ROOT = Path(args.root)
-OUT = Path("results/deepliif_eval") / (args.backend + (f"_p{args.prob}" if args.prob else "")); OUT.mkdir(parents=True, exist_ok=True)
+OUT = Path("results/deepliif_eval") / (args.backend + (f"_p{args.prob}" if args.prob else "") + ("_fit" if args.fit_stains else "")); OUT.mkdir(parents=True, exist_ok=True)
 TOL = 10.0
 
 
@@ -87,7 +88,7 @@ def evaluate(cfg, files, cache):
 
 
 files = sorted(glob.glob(str(ROOT / "*.png")))
-cfg0 = Config(backend=args.backend, nucleus_radius_px=args.radius, stardist_prob=args.prob)
+cfg0 = Config(backend=args.backend, nucleus_radius_px=args.radius, fit_stains=args.fit_stains, **({'stardist_prob': args.prob} if args.prob else {}))
 cache = {}
 df0, s0 = evaluate(cfg0, files, cache)
 print("== default thresholds, all fields ==")

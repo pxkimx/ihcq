@@ -50,7 +50,7 @@ class Config:
     stardist_prob: Optional[float] = 0.35         # detection probability; the H&E model's own 0.69 misses pale IHC nuclei
     stardist_nms: Optional[float] = None          # None → model default (0.3)
     # scoring
-    compartment: str = "nuclear"                  # nuclear | membrane | cytoplasm
+    compartment: str = "nuclear"                  # nuclear | membrane | cytoplasm | cell
     ring_px: int = 3                              # ring width for membrane/cytoplasm compartments
     cell_statistic: str = "mean"                  # mean | median | p90 — how DAB is summarised per cell
     thresholds: Thresholds = field(default_factory=Thresholds)
@@ -64,8 +64,8 @@ class Config:
         self.thresholds.validate()
         if self.segment_on not in ("auto", "hema", "hema+dab", "gray"):
             raise ValueError("segment_on must be auto, hema, hema+dab or gray")
-        if self.compartment not in ("nuclear", "membrane", "cytoplasm"):
-            raise ValueError("compartment must be nuclear, membrane or cytoplasm")
+        if self.compartment not in ("nuclear", "membrane", "cytoplasm", "cell"):
+            raise ValueError("compartment must be nuclear, membrane, cytoplasm or cell")
         if self.cell_statistic not in ("mean", "median", "p90"):
             raise ValueError("cell_statistic must be mean, median or p90")
         return self

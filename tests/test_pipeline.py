@@ -101,3 +101,12 @@ def test_stain_identity_flags_he():
     rgb_ihc, *_ = make_field(n_cells=250, seed=8)
     r2 = analyze(rgb_ihc, Config())
     assert r2.summary["second_stain"] == "dab" and r2.summary["scores_valid"] is True
+
+
+def test_cell_compartment_covers_nucleus_and_band():
+    rgb, *_ = make_field(n_cells=150, seed=4, dab_cyto=0.7)
+    r = analyze(rgb, Config(compartment="cell"))
+    assert r.summary["n_cells"] > 100
+    assert ((r.labels > 0) <= (r.score_labels > 0)).all()      # every nucleus pixel is inside its cell
+    assert (r.score_labels > 0).sum() > (r.labels > 0).sum()    # and the cell is bigger than the nucleus
+    assert "pct_positive_ci95" in r.summary

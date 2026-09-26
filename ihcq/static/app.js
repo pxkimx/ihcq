@@ -23,7 +23,7 @@ let refreshT; function refreshAll() { clearTimeout(refreshT); refreshT = setTime
 const PRESETS = {
   nuclear: { compartment: "nuclear", statistic: "mean", weak: .15, moderate: .40, strong: .80, segment: true, ring: 3 },
   membrane: { compartment: "membrane", statistic: "p90", weak: .15, moderate: .40, strong: .80, segment: true, ring: 3 },
-  cyto: { compartment: "cytoplasm", statistic: "mean", weak: .15, moderate: .40, strong: .80, segment: true, ring: 4 },
+  cyto: { compartment: "cell", statistic: "mean", weak: .15, moderate: .40, strong: .80, segment: true, ring: 4 },
   pale: { compartment: "membrane", statistic: "p90", weak: .12, moderate: .20, strong: .36, segment: true, ring: 3 },
   pixels: { compartment: "nuclear", statistic: "mean", weak: .15, moderate: .40, strong: .80, segment: false, ring: 3 },
 };
@@ -99,7 +99,7 @@ function renderTiles(s) {
   const hcol = `var(${BIN[Math.min(3, Math.floor((s.h_score || 0) / 100) + 1)]})`;
   $("#tiles").innerHTML =
     (seg ? tile(fmt(s.h_score, 0), "H-score", "0 – 300", hcol) : "") +
-    (seg ? tile(fmt(s.pct_positive) + "%", "positive cells", `${s.n_cells} nuclei`, "var(--b2)") : "") +
+    (seg ? tile(fmt(s.pct_positive) + "%", "positive cells", s.pct_positive_ci95 ? `95% CI ${s.pct_positive_ci95[0]}–${s.pct_positive_ci95[1]} · n ${s.n_cells}` : `${s.n_cells} nuclei`, "var(--b2)") : "") +
     (seg ? tile(fmt(s.pct_3plus) + "%", "3+ cells", `2+ ${fmt(s.pct_2plus)}% · 1+ ${fmt(s.pct_1plus)}%`, "var(--b3)") : "") +
     (seg ? tile(fmt(s.allred_total, 0), "Allred", `PS ${fmt(s.allred_ps, 0)} + IS ${fmt(s.allred_is, 0)}`, "var(--b1)") : "") +
     (seg ? tile(fmt(s.irs, 0), "IRS", `PS ${fmt(s.irs_ps, 0)} × IS ${fmt(s.irs_is, 0)} · 0–12`, "var(--acc)") : "") +
@@ -131,7 +131,7 @@ function drawViewer() {
   ctx.imageSmoothingEnabled = sc < 2;
   ctx.setTransform(sc, 0, 0, sc, state.pan.x, state.pan.y);
   ctx.drawImage(im, 0, 0);
-  if (state.layer === "heat") { ctx.globalAlpha = $("#opacity").value / 100; ctx.drawImage(heatCanvas(), 0, 0, im.width, im.height); ctx.globalAlpha = 1; }
+  if (state.layer === "heat") { ctx.globalAlpha = $("#opacity").value / 100; const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = true; ctx.drawImage(heatCanvas(), 0, 0, im.width, im.height); ctx.imageSmoothingEnabled = sm; ctx.globalAlpha = 1; }
   else if (state.layer !== "original") { ctx.globalAlpha = $("#opacity").value / 100; const ov = state.imgs[state.layer]; ctx.drawImage(ov, 0, state.imgs.cap, im.width, im.height, 0, 0, im.width, im.height); ctx.globalAlpha = 1; }
   // ROI polygons
   const R = state.rois[state.cur] || { include: [], exclude: [] };
@@ -151,13 +151,13 @@ function heatCanvas() {
   for (const c of j.cells) { const cx = c[0] / f, cy = c[1] / f, pos = binOf(c[3]) > 0 ? 1 : 0;
     for (let y = Math.max(0, cy - r | 0); y <= Math.min(h - 1, cy + r | 0); y++) for (let x = Math.max(0, cx - r | 0); x <= Math.min(w - 1, cx + r | 0); x++) { const d2 = (x - cx) ** 2 + (y - cy) ** 2; if (d2 > r2) continue; const wgt = 1 - d2 / r2; acc[y * w + x] += wgt * pos; tot[y * w + x] += wgt; } }
   const c = document.createElement("canvas"); c.width = w; c.height = h; const g = c.getContext("2d"); const id = g.createImageData(w, h); const d = id.data;
-  for (let i = 0; i < w * h; i++) { if (tot[i] < 0.6) continue; const v = acc[i] / tot[i]; const t = Math.min(1, v); const rr = t < .5 ? 79 + (246 - 79) * t * 2 : 246 + (255 - 246) * (t - .5) * 2, gg = t < .5 ? 131 + (201 - 131) * t * 2 : 201 - (201 - 77) * (t - .5) * 2, bb = t < .5 ? 255 - (255 - 69) * t * 2 : 69 - (69 - 94) * (t - .5) * 2; d[i * 4] = rr; d[i * 4 + 1] = gg; d[i * 4 + 2] = bb; d[i * 4 + 3] = 150 + 90 * Math.min(1, tot[i] / 3); }
+  for (let i = 0; i < w * h; i++) { if (tot[i] < 0.6) continue; const v = acc[i] / tot[i]; const t = Math.min(1, v); const rr = t < .5 ? 79 + (246 - 79) * t * 2 : 246 + (255 - 246) * (t - .5) * 2, gg = t < .5 ? 131 + (201 - 131) * t * 2 : 201 - (201 - 77) * (t - .5) * 2, bb = t < .5 ? 255 - (255 - 69) * t * 2 : 69 - (69 - 94) * (t - .5) * 2; d[i * 4] = rr; d[i * 4 + 1] = gg; d[i * 4 + 2] = bb; d[i * 4 + 3] = 60 + 80 * Math.min(1, tot[i] / 3); }
   g.putImageData(id, 0, 0); state.heat = { id: j.id, th: JSON.stringify(state.th), c }; return c;
 }
 /* ROI tools */
 $$("#roi-tools button").forEach(b => b.onclick = () => { const t = b.dataset.tool; if (t === "clear") { state.rois[state.cur] = { include: [], exclude: [] }; state.drawing = null; state.tool = null; $$("#roi-tools button").forEach(x => x.setAttribute("aria-pressed", "false")); $("#roi-apply").disabled = false; $("#roi-apply").textContent = "Score full field"; drawViewer(); return; } state.tool = state.tool === t ? null : t; state.drawing = null; $$("#roi-tools button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.tool === state.tool))); viewer.style.cursor = state.tool ? "crosshair" : "grab"; });
 function imgPoint(e) { const r = cv.getBoundingClientRect(); const sc = state.base * state.zoom; return [((e.clientX - r.left) * devicePixelRatio - state.pan.x) / sc, ((e.clientY - r.top) * devicePixelRatio - state.pan.y) / sc]; }
-viewer.addEventListener("click", e => { if (!state.tool || !state.cur) return; const p = imgPoint(e); if (!state.drawing) state.drawing = { tool: state.tool, pts: [] }; state.drawing.pts.push([Math.round(p[0]), Math.round(p[1])]); drawViewer(); });
+viewer.addEventListener("click", e => { if (!state.tool || !state.cur || e.target.closest(".vfloat")) return; const p = imgPoint(e); if (!state.drawing) state.drawing = { tool: state.tool, pts: [] }; state.drawing.pts.push([Math.round(p[0]), Math.round(p[1])]); drawViewer(); });
 viewer.addEventListener("dblclick", e => { if (!state.drawing) return; e.preventDefault(); const d = state.drawing; state.drawing = null; if (d.pts.length >= 3) { const R = state.rois[state.cur] = state.rois[state.cur] || { include: [], exclude: [] }; R[d.tool].push(d.pts.slice(0, -1)); $("#roi-apply").disabled = false; $("#roi-apply").textContent = "Score inside ROI"; toast(`${d.tool === "include" ? "ROI" : "Exclusion"} closed — ${d.pts.length - 1} points`); } drawViewer(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape" && state.drawing) { state.drawing = null; drawViewer(); } });
 $("#roi-apply").onclick = async () => { const j = state.results[state.cur]; if (!j) return; const R = state.rois[state.cur] || { include: [], exclude: [] }; const b = $("#roi-apply"); b.disabled = true; b.textContent = "Scoring…";
@@ -168,7 +168,7 @@ $$("#layers button").forEach(b => b.onclick = () => setLayer(b.dataset.layer));
 function setLayer(l) { state.layer = l; $$("#layers button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.layer === l))); drawViewer(); }
 $("#opacity").oninput = drawViewer; $("#fit").onclick = () => { fitView(); drawViewer(); };
 viewer.addEventListener("wheel", e => { e.preventDefault(); const r = cv.getBoundingClientRect(); const mx = (e.clientX - r.left) * devicePixelRatio, my = (e.clientY - r.top) * devicePixelRatio; const f = Math.exp(-e.deltaY * 0.0015); const nz = Math.min(12, Math.max(1, state.zoom * f)); const k = nz / state.zoom; state.pan.x = mx - (mx - state.pan.x) * k; state.pan.y = my - (my - state.pan.y) * k; state.zoom = nz; if (nz === 1) fitView(); drawViewer(); }, { passive: false });
-let drag = null; viewer.addEventListener("pointerdown", e => { if (state.tool) return; drag = { x: e.clientX, y: e.clientY, px: state.pan.x, py: state.pan.y }; viewer.setPointerCapture(e.pointerId); });
+let drag = null; viewer.addEventListener("pointerdown", e => { if (state.tool || e.target.closest(".vfloat")) return; drag = { x: e.clientX, y: e.clientY, px: state.pan.x, py: state.pan.y }; viewer.setPointerCapture(e.pointerId); });
 viewer.addEventListener("pointerup", () => drag = null);
 viewer.addEventListener("pointermove", e => {
   if (drag) { state.pan.x = drag.px + (e.clientX - drag.x) * devicePixelRatio; state.pan.y = drag.py + (e.clientY - drag.y) * devicePixelRatio; drawViewer(); return; }

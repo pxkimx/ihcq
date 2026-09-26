@@ -54,6 +54,18 @@ def per_cell_table(labels: np.ndarray, score_labels: np.ndarray, dab: np.ndarray
     return df
 
 
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score interval for a proportion k/n — the counting uncertainty
+    of a positive-cell percentage.  Honest at small n and near 0 or 100 %."""
+    if n == 0:
+        return (float("nan"), float("nan"))
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return (max(0.0, c - h), min(1.0, c + h))
+
+
 def h_score(bins: np.ndarray) -> float:
     """H-score = Σ (intensity × % of cells at that intensity), 0–300."""
     bins = np.asarray(bins)
@@ -152,6 +164,8 @@ def cell_summary(df: pd.DataFrame, tissue_area_px: int, mpp: float | None = None
         return out
     b = df["bin"].to_numpy()
     out["pct_positive"] = round(float((b > 0).mean() * 100), 2)
+    lo, hi = wilson(int((b > 0).sum()), n)
+    out["pct_positive_ci95"] = [round(lo * 100, 1), round(hi * 100, 1)]
     for k in (1, 2, 3):
         out[f"pct_{k}plus"] = round(float((b == k).mean() * 100), 2)
     out["h_score"] = h_score(b)

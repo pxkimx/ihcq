@@ -38,3 +38,11 @@ def test_irs_and_profiler_and_hotspot():
     b = ((x < 300) & (y < 300)).astype(int) * 3     # a positive corner
     h = hotspot(pd.DataFrame({"x": x, "y": y, "bin": b}), window_cells=40)
     assert h["hotspot_pct_positive"] > 85 and h["coldspot_pct_positive"] < 5 and h["hotspot_xy"][0] < 400
+
+
+def test_wilson_interval():
+    from ihcq.metrics import wilson
+    lo, hi = wilson(27, 150)           # 18 % of 150
+    assert 0.12 < lo < 0.13 and 0.24 < hi < 0.26
+    lo, hi = wilson(0, 40)
+    assert lo == 0.0 and 0.08 < hi < 0.10

@@ -209,3 +209,9 @@ label.check.tight{margin:0;gap:5px;font-size:12px}
 .celltable tr.hl{background:color-mix(in srgb,var(--acc) 22%,transparent)}
 .bdot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:-1px}
 .seg.sm button{padding:3px 8px;font-size:11px}
+
+.vfloat{position:absolute;top:8px;right:8px;display:flex;align-items:center;gap:6px;padding:4px 6px 4px 8px;border-radius:10px;background:#0d1017cc;backdrop-filter:blur(6px);border:1px solid #ffffff1f;z-index:4;color:#e8ecf4;font:600 11px var(--mono)}
+.vfloat .btn{background:transparent;color:#e8ecf4;border-color:#ffffff33;padding:3px 8px}
+.vfloat label.check{color:#e8ecf4}
+.viewer-bar{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}.viewer-bar::-webkit-scrollbar{display:none}
+.viewer-bar>*{flex:0 0 auto}
