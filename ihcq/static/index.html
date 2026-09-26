@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ihcq</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 40 40" aria-hidden="true">
+      <circle cx="13" cy="15" r="7" class="m-h"/><circle cx="26" cy="12" r="6" class="m-h"/><circle cx="22" cy="27" r="7.5" class="m-d"/><circle cx="9" cy="29" r="4.5" class="m-h"/><circle cx="33" cy="26" r="4" class="m-d2"/>
+    </svg>
+    <div><b>ihcq</b><span>chromogenic IHC quantification</span></div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-view="score" aria-pressed="true">Score</button>
+    <button data-view="session">Session <em id="tab-count" hidden>0</em></button>
+    <button data-view="calibrate">Calibrate</button>
+    <button data-view="help">Help</button>
+  </nav>
+  <div class="top-actions">
+    <div class="demo-wrap">
+      <button class="btn" id="demo">Demo field ▾</button>
+      <div class="menu" id="demo-menu" hidden>
+        <button data-kind="real"><b>Real IHC</b> · colon, membranous</button>
+        <button data-kind="negative">Synthetic · negative control</button><button data-kind="low">Synthetic · low</button>
+        <button data-kind="mixed">Synthetic · mixed 0–3+</button><button data-kind="high">Synthetic · high</button>
+      </div>
+    </div>
+    <button class="icon" id="theme" title="Light / dark">◐</button>
+    <button class="btn ghost" id="quit" title="Stop the local server">Quit</button>
+  </div>
+</header>
+
+<main>
+<!-- ============================ SCORE ============================ -->
+<section class="view" id="view-score">
+  <aside class="side">
+    <div class="card">
+      <div class="drop" id="drop" tabindex="0" role="button">
+        <div class="drop-art"><span class="b0"></span><span class="b1"></span><span class="b2"></span><span class="b3"></span></div>
+        <b>Drop IHC images</b><span>PNG · JPG · TIFF — several at once is fine, or click to choose</span>
+        <input id="file" type="file" accept="image/*" multiple hidden>
+      </div>
+      <ul class="queue" id="queue"></ul>
+    </div>
+
+    <div class="card">
+      <h3>Preset</h3>
+      <select id="preset">
+        <option value="nuclear">Nuclear marker · Ki-67, ER, PR, p53</option>
+        <option value="membrane">Membrane marker · HER2, PD-L1, EGFR</option>
+        <option value="cyto">Cytoplasmic marker</option>
+        <option value="pale">Pale scanner (BCI-calibrated cut points)</option>
+        <option value="pixels">Pixel-only · stroma, ECM, secreted</option>
+      </select>
+      <details class="adv" open>
+        <summary>Analysis settings</summary>
+        <label>Compartment</label>
+        <select id="compartment"><option value="nuclear">Nuclear</option><option value="membrane">Membrane ring</option><option value="cytoplasm">Cytoplasm band</option></select>
+        <div class="row">
+          <div><label>Pixel size µm/px</label><input id="mpp" type="number" step="0.01" placeholder="0.25"></div>
+          <div><label>or radius px</label><input id="radius" type="number" step="1" placeholder="8"></div>
+          <div><label>Ring px</label><input id="ring" type="number" step="1" value="3"></div>
+        </div>
+        <label>Nucleus finder</label>
+        <select id="backend"><option value="watershed">Classical (fast, no model)</option><option value="hybrid">Hybrid · StarDist + classical (best)</option><option value="stardist">StarDist only</option></select>
+        <label>Per-cell statistic</label>
+        <select id="statistic"><option value="mean">Mean DAB OD</option><option value="median">Median</option><option value="p90">90th percentile (membrane / punctate)</option></select>
+        <label class="check"><input id="segment" type="checkbox" checked> Find nuclei (uncheck for pixel metrics only)</label>
+      </details>
+      <button class="btn primary" id="reanalyze" style="width:100%;margin-top:12px;justify-content:center" disabled>Re-analyze current image with these settings</button>
+      <details class="adv" open>
+        <summary>Cut points (DAB OD)</summary>
+        <div class="cuts">
+          <div class="cut b1"><label>0 → 1+</label><input id="weak" type="number" step="0.01" value="0.15"></div>
+          <div class="cut b2"><label>1+ → 2+</label><input id="moderate" type="number" step="0.01" value="0.40"></div>
+          <div class="cut b3"><label>2+ → 3+</label><input id="strong" type="number" step="0.01" value="0.80"></div>
+        </div>
+        <p class="mut">These are the whole result. Calibrate on control tissue (the <b>Calibrate</b> tab) before reporting.</p>
+        <div class="row gap">
+          <button class="btn sm" id="save-profile">Save profile</button>
+          <label class="btn sm">Load profile<input id="load-profile" type="file" accept="application/json" hidden></label>
+        </div>
+      </details>
+    </div>
+  </aside>
+
+  <div class="stage">
+    <div class="empty-state" id="empty">
+      <div class="hero-art">
+        <div class="dot b0"></div><div class="dot b1"></div><div class="dot b2"></div><div class="dot b3"></div>
+      </div>
+      <h2>Score a slide</h2>
+      <p>Drop an image on the left, or open a <b>Demo field</b> from the top bar to see every panel light up on a synthetic slide with known truth.</p>
+    </div>
+
+    <div id="result" hidden>
+      <div class="result-head">
+        <div>
+          <div class="eyebrow" id="r-name">—</div>
+          <div class="stain" id="r-stain"></div>
+        </div>
+        <div class="head-actions">
+          <label class="inline mut">Group <input id="group" type="text" placeholder="e.g. control" style="width:120px;padding:5px 8px"></label>
+          <div class="dl-wrap">
+            <button class="btn sm" id="dl-btn">Download ▾</button>
+            <div class="menu" id="dl-menu" hidden>
+              <a id="dl-orig" download>Original image (PNG)</a>
+              <a id="dl-cells-img" download>Labelled nuclei overlay (PNG)</a>
+              <a id="dl-pos" download>Positivity map (PNG)</a>
+              <a id="dl-stains" download>Stain separation panels (PNG)</a>
+              <a id="dl-cells" download>Per-cell table (CSV)</a>
+              <a id="dl-session" href="/out/session_results.csv" download>Session table (CSV)</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tiles" id="tiles"></div>
+      <div class="qc" id="qc"></div>
+
+      <div class="grid2">
+        <div class="card viewer-card">
+          <div class="viewer-bar">
+            <div class="seg" id="layers">
+              <button data-layer="original">Original</button>
+              <button data-layer="cells" aria-pressed="true">Cells by bin</button>
+              <button data-layer="positivity">Positivity</button>
+            </div>
+            <label class="inline">Overlay <input id="opacity" type="range" min="0" max="100" value="100"></label>
+            <button class="btn sm ghost" id="fit">Fit</button>
+            <span class="mut" id="zoom-label">100%</span>
+          </div>
+          <div class="viewer" id="viewer">
+            <canvas id="cv"></canvas>
+            <div class="tip" id="tip" hidden></div>
+          </div>
+          <div class="legend">
+            <span><i class="b0"></i>0</span><span><i class="b1"></i>1+</span><span><i class="b2"></i>2+</span><span><i class="b3"></i>3+</span>
+            <span class="mut">scroll to zoom · drag to pan · hover a nucleus</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>DAB intensity per cell <span class="mut">drag the cut points</span></h3>
+          <canvas id="hist" height="190"></canvas>
+          <div class="live" id="live"></div>
+          <div class="binbar" id="binbar"></div>
+          <div class="row gap">
+            <button class="btn primary sm" id="apply">Apply cut points to this image</button>
+            <button class="btn sm ghost" id="reset-th">Reset</button>
+          </div>
+          <p class="mut" id="truth"></p>
+          <h3 style="margin-top:16px">Stain separation</h3>
+          <img class="stains" id="stains" alt="original | hematoxylin | DAB">
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ SESSION ============================ -->
+<section class="view" id="view-session" hidden>
+  <div class="card">
+    <div class="card-head">
+      <h3>Every image scored this session</h3>
+      <div class="row gap">
+        <button class="btn sm" id="copy-tsv">Copy as TSV</button>
+        <a class="btn sm" href="/out/session_results.csv" download>Download CSV</a>
+        <a class="btn primary sm" id="report" href="/api/report" download>PDF report — all images, overlays, data &amp; stats</a>
+      </div>
+    </div>
+    <p class="mut" style="margin:-2px 0 10px">Type a <b>group</b> for each image (in the table below or on the Score tab) to unlock the statistics panels: two groups → Welch t-test and Mann–Whitney; more → ANOVA and Kruskal–Wallis with Bonferroni-corrected pairwise tests.</p>
+    <div class="charts">
+      <div><h4>Bin composition per image</h4><div id="stack"></div></div>
+      <div><h4>H-score per image</h4><div id="hplot"></div></div>
+    </div>
+  </div>
+  <div class="grid2 wide" style="margin-top:14px">
+    <div class="card">
+      <div class="card-head"><h3>Compare groups</h3>
+        <select id="stat-metric" style="width:auto"><option value="h_score">H-score</option><option value="pct_positive">% positive cells</option><option value="pct_3plus">% 3+ cells</option><option value="allred_total">Allred</option><option value="dab_area_fraction_pct">DAB area %</option><option value="mean_dab_od_tissue">mean DAB OD</option><option value="cells_per_tissue_px1e4">nuclear density</option></select></div>
+      <div id="boxplot"></div>
+      <div id="stat-table" class="mut">Assign groups to see statistics.</div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Correlate two metrics</h3>
+        <div class="row gap" style="margin:0"><select id="cor-x" style="width:auto"><option value="pct_positive">% positive</option><option value="h_score">H-score</option><option value="dab_area_fraction_pct">DAB area %</option><option value="mean_dab_od_tissue">mean DAB OD</option><option value="n_cells">nuclei</option><option value="allred_total">Allred</option></select>
+        <span class="mut" style="align-self:center">vs</span>
+        <select id="cor-y" style="width:auto"><option value="h_score">H-score</option><option value="pct_positive">% positive</option><option value="dab_area_fraction_pct">DAB area %</option><option value="mean_dab_od_tissue">mean DAB OD</option><option value="n_cells">nuclei</option><option value="allred_total">Allred</option></select></div></div>
+      <div id="scatter"></div>
+      <div id="cor-table" class="mut"></div>
+    </div>
+    <div class="tw"><table id="stbl"><thead><tr>
+      <th data-k="image">image</th><th data-k="group">group</th><th data-k="n_cells" class="n">cells</th><th data-k="pct_positive" class="n">% +</th>
+      <th data-k="pct_1plus" class="n">1+</th><th data-k="pct_2plus" class="n">2+</th><th data-k="pct_3plus" class="n">3+</th>
+      <th data-k="h_score" class="n">H</th><th data-k="allred_total" class="n">Allred</th><th data-k="dab_area_fraction_pct" class="n">DAB area %</th>
+      <th data-k="mean_dab_od_tissue" class="n">mean OD</th><th data-k="second_stain">stain</th><th data-k="profile">cuts</th><th>flags</th>
+    </tr></thead><tbody></tbody></table></div>
+  </div>
+</section>
+
+<!-- ============================ CALIBRATE ============================ -->
+<section class="view" id="view-calibrate" hidden>
+  <div class="grid2 wide">
+    <div class="card">
+      <h3>1 · Tell it which images are controls</h3>
+      <p class="mut">Score your control fields first (Score tab). Then mark each one: the negative control anchors the 0/1+ cut — nothing in it may score positive; the upper cuts sit between the positive-cell populations of the 1+, 2+ and 3+ controls.</p>
+      <div class="tw"><table id="ctbl"><thead><tr><th>image</th><th class="n">cells</th><th class="n">median OD</th><th>role</th></tr></thead><tbody></tbody></table></div>
+      <button class="btn primary" id="fit-btn" style="margin-top:10px">Fit cut points</button>
+    </div>
+    <div class="card">
+      <h3>2 · Result</h3>
+      <div id="cal-out" class="mut">No fit yet.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ HELP ============================ -->
+<section class="view" id="view-help" hidden>
+  <div class="grid2 wide">
+    <div class="card prose">
+      <h3>What the numbers mean</h3>
+      <p><b>H-score</b> = 1·%1+ + 2·%2+ + 3·%3+ over all cells, 0–300. <b>Allred</b> = proportion score (0–5) + intensity score (0–3). <b>% positive</b> = cells at or above the 0/1+ cut. <b>DAB area %</b> = tissue pixels above the 0/1+ cut, over the tissue footprint (holes filled). <b>Mean DAB OD</b> = optical density averaged over tissue — under Beer–Lambert, OD is linear in chromogen amount, RGB brightness is not.</p>
+      <p>Each cell's DAB is read in a <b>compartment</b>: the nucleus (Ki-67, ER, PR, p53), a ring outside it (HER2, PD-L1) or a wider band (cytoplasmic markers). The per-cell statistic is the mean by default; the 90th percentile is more faithful for punctate or membranous staining.</p>
+      <h3>Workflow that holds up</h3>
+      <ol><li>Score a negative control and a strong positive. Look at the overlays — do the outlines sit on nuclei?</li><li>Set the pixel size (or nuclear radius) so the finder is at the right scale.</li><li>Calibrate the cut points on controls, save the profile, use it for the whole series.</li><li>Read the QC flags on every result. They are there to stop a number leaving the room unearned.</li></ol>
+    </div>
+    <div class="card prose">
+      <h3>What it will refuse to pretend</h3>
+      <p>If the second stain is <b>eosin</b>, the field is H&amp;E and DAB scores are marked invalid — nuclear counts and density still stand. If the field has <b>no glass</b>, the white point is assumed and flagged; give it a value measured on a blank area. If nuclei look far larger or smaller than assumed, it says so. Melanin is brown and is not DAB; it reads "unrecognised".</p>
+      <h3>Keyboard</h3>
+      <p><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> layers · <kbd>F</kbd> fit view · <kbd>←</kbd> <kbd>→</kbd> previous / next image · <kbd>Enter</kbd> apply cut points</p>
+      <p class="mut">Everything runs on this Mac. Nothing is uploaded anywhere.</p>
+    </div>
+  </div>
+</section>
+</main>
+
+<div class="toast" id="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

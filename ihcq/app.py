@@ -1,11 +1,20 @@
 """Local desktop UI: `ihcq app` (or double-click IHCQ.app).
 
-A small HTTP server on 127.0.0.1 with one page.  Drop images, set options,
-read scores, look at the QC overlays, download the session's results.  No
-data leaves the machine; nothing is installed beyond ihcq itself.
+A small HTTP server on 127.0.0.1 serving one page.  Nothing leaves the
+machine and nothing is installed beyond ihcq itself.
+
+API (all JSON, all local):
+  POST /api/score?name=&<options>   image bytes in body → result
+  GET  /api/demo?<options>          synthetic field with known truth → result
+  POST /api/rebin?id=&weak=&moderate=&strong=   re-bin a cached result
+  POST /api/calibrate               {"groups": {"negative": [ids], ...}} → cut points
+  GET  /api/session                 every result of this session
+  GET  /out/<file>                  overlays, originals, CSVs
+  POST /api/quit
 """
 from __future__ import annotations
 
+import io as _io
 import json
 import socket
 import sys
@@ -14,17 +23,21 @@ import threading
 import time
 import urllib.parse
 import webbrowser
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from PIL import Image
 
-from .config import Config
+from .config import Config, Thresholds
 
 HOST, PORT = "127.0.0.1", 8765
 OUT = Path(tempfile.mkdtemp(prefix="ihcq_"))
-SESSION = {"rows": [], "lock": threading.Lock(), "server": None}
+STATIC = Path(__file__).parent / "static"
+SESSION = {"rows": [], "cache": OrderedDict(), "assets": {}, "groups": {}, "lock": threading.Lock(), "server": None, "seq": 0}
+CACHE_MAX = 12
 
 
 def _cfg_from_query(q: dict) -> Config:
@@ -36,36 +49,182 @@ def _cfg_from_query(q: dict) -> Config:
     if g("segment_on"): cfg.segment_on = g("segment_on")
     if g("mpp"): cfg.mpp = float(g("mpp"))
     if g("radius"): cfg.nucleus_radius_px = int(float(g("radius")))
+    if g("ring"): cfg.ring_px = int(float(g("ring")))
     for k in ("weak", "moderate", "strong"):
         if g(k): setattr(cfg.thresholds, k, float(g(k)))
     if any(g(k) for k in ("weak", "moderate", "strong")):
-        cfg.profile_name = "app-thresholds"
+        cfg.profile_name = g("profile_name") or "app"
     if g("white"):
         cfg.white_point = [float(v) for v in g("white").split(",")]
     if g("segment") == "0": cfg.segment = False
     return cfg.validate()
 
 
+def _safe(stem: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_." else "_" for c in stem)[:60] or "image"
+
+
+def _payload(rid: str, entry: dict, paths: dict) -> dict:
+    res = entry["res"]
+    cells = res.cells
+    cell_list = cells[["x", "y", "area_px", "dab_od", "hema_od", "bin"]].round(3).values.tolist() if len(cells) else []
+    return {"id": rid, "summary": {"image": entry["name"], **res.summary}, "qc": res.qc,
+            "overlays": {k: f"/out/{v.name}" for k, v in paths.items()}, "original": f"/out/{entry['orig'].name}",
+            "cells": cell_list, "thresholds": {"weak": res.config.thresholds.weak, "moderate": res.config.thresholds.moderate, "strong": res.config.thresholds.strong},
+            "cells_csv": f"/out/{entry['cells_csv'].name}" if entry.get("cells_csv") else None,
+            "results_csv": "/out/session_results.csv", "n_session": len(SESSION["rows"])}
+
+
+def _record(rid: str, entry: dict, paths: dict | None = None):
+    row = {"id": rid, "image": entry["name"], "group": SESSION["groups"].get(rid, ""), **entry["res"].summary}
+    if paths is not None:
+        SESSION["assets"][rid] = {"images": {"original": str(entry["orig"]), **{k: str(v) for k, v in paths.items()}},
+                                  "cells_csv": str(entry["cells_csv"]) if entry.get("cells_csv") else None}
+    SESSION["assets"].setdefault(rid, {})["summary"] = row; SESSION["assets"][rid]["qc"] = entry["res"].qc
+    with SESSION["lock"]:
+        SESSION["rows"] = [r for r in SESSION["rows"] if r["id"] != rid] + [row]
+        pd.DataFrame(SESSION["rows"]).drop(columns=["id"]).to_csv(OUT / "session_results.csv", index=False)
+
+
 def _score(rgb: np.ndarray, cfg: Config, stem: str) -> dict:
     from .pipeline import analyze, write_overlays
     res = analyze(rgb, cfg)
-    stem = "".join(c if c.isalnum() or c in "-_." else "_" for c in stem)[:60] or "image"
-    stamp = f"{stem}_{int(time.time()*1000) % 100000}"
+    SESSION["seq"] += 1
+    rid = f"r{SESSION['seq']}"
+    stamp = f"{_safe(stem)}_{rid}"
     paths = write_overlays(rgb, res, OUT, stamp)
-    cells_url = None
+    orig = OUT / f"{stamp}_original.png"; Image.fromarray(rgb).save(orig)
+    entry = {"name": _safe(stem), "rgb": rgb, "res": res, "orig": orig, "stamp": stamp}
     if len(res.cells):
-        p = OUT / f"{stamp}_cells.csv"; res.cells.to_csv(p, index=False); cells_url = f"/out/{p.name}"
-    row = {"image": stem, **res.summary}
+        entry["cells_csv"] = OUT / f"{stamp}_cells.csv"; res.cells.to_csv(entry["cells_csv"], index=False)
     with SESSION["lock"]:
-        SESSION["rows"].append(row)
-        pd.DataFrame(SESSION["rows"]).to_csv(OUT / "session_results.csv", index=False)
-    return {"summary": row, "qc": res.qc,
-            "overlays": {k: f"/out/{v.name}" for k, v in paths.items()},
-            "cells_csv": cells_url, "results_csv": "/out/session_results.csv", "n_session": len(SESSION["rows"])}
+        SESSION["cache"][rid] = entry
+        while len(SESSION["cache"]) > CACHE_MAX:
+            SESSION["cache"].popitem(last=False)
+    _record(rid, entry, paths)
+    return _payload(rid, entry, paths)
+
+
+def _rebin(rid: str, th: Thresholds) -> dict:
+    from .pipeline import write_overlays
+    from .metrics import per_cell_table, cell_summary, pixel_summary
+    entry = SESSION["cache"].get(rid)
+    if entry is None:
+        raise KeyError("that result is no longer cached — score the image again")
+    res = entry["res"]; cfg = Config.from_dict(res.config.to_dict()); cfg.thresholds = th; cfg.profile_name = "app-adjusted"
+    dab, hema = res.conc[..., 1], res.conc[..., 0]
+    s = dict(res.summary)
+    s.update(pixel_summary(dab, hema, res.tissue, th, cfg.pixel_positive_od, cfg.mpp))
+    if cfg.segment and res.labels.max() > 0:
+        res.cells = per_cell_table(res.labels, res.score_labels, dab, hema, th, cfg.cell_statistic, cfg.mpp)
+        s.update(cell_summary(res.cells, int(res.tissue.sum()), cfg.mpp))
+    s.update({"thr_weak": th.weak, "thr_moderate": th.moderate, "thr_strong": th.strong, "profile": cfg.profile_name})
+    res.summary = s; res.config = cfg
+    paths = write_overlays(entry["rgb"], res, OUT, entry["stamp"] + f"_t{int(time.time()*1000) % 100000}")
+    if len(res.cells):
+        entry["cells_csv"] = OUT / f"{entry['stamp']}_cells.csv"; res.cells.to_csv(entry["cells_csv"], index=False)
+    _record(rid, entry, paths)
+    return _payload(rid, entry, paths)
+
+
+def _reanalyze(rid: str, cfg: Config) -> dict:
+    from .pipeline import analyze, write_overlays
+    entry = SESSION["cache"].get(rid)
+    if entry is None:
+        raise KeyError("that image is no longer cached — drop it again")
+    res = analyze(entry["rgb"], cfg)
+    entry["res"] = res
+    paths = write_overlays(entry["rgb"], res, OUT, entry["stamp"] + f"_a{int(time.time()*1000) % 100000}")
+    if len(res.cells):
+        entry["cells_csv"] = OUT / f"{entry['stamp']}_cells.csv"; res.cells.to_csv(entry["cells_csv"], index=False)
+    else:
+        entry.pop("cells_csv", None)
+    _record(rid, entry, paths)
+    return _payload(rid, entry, paths)
+
+
+def _stats(metric: str) -> dict:
+    from scipy import stats as st
+    rows = [r for r in SESSION["rows"] if r.get("group")]
+    groups = {}
+    for r in rows:
+        v = r.get(metric)
+        if v is not None and not (isinstance(v, float) and np.isnan(v)):
+            groups.setdefault(r["group"], []).append(float(v))
+    out = {"metric": metric, "groups": {}, "tests": {}, "note": ""}
+    for g, v in groups.items():
+        a = np.asarray(v)
+        out["groups"][g] = {"n": int(a.size), "mean": round(float(a.mean()), 3), "sd": round(float(a.std(ddof=1)), 3) if a.size > 1 else None,
+                            "median": round(float(np.median(a)), 3), "q1": round(float(np.percentile(a, 25)), 3), "q3": round(float(np.percentile(a, 75)), 3),
+                            "min": round(float(a.min()), 3), "max": round(float(a.max()), 3), "values": [round(x, 3) for x in a.tolist()]}
+    arrs = [np.asarray(v) for v in groups.values() if len(v) >= 2]
+    if len(groups) == 2 and len(arrs) == 2:
+        t = st.ttest_ind(*arrs, equal_var=False); u = st.mannwhitneyu(*arrs, alternative="two-sided")
+        d = (arrs[0].mean() - arrs[1].mean()) / np.sqrt((arrs[0].var(ddof=1) + arrs[1].var(ddof=1)) / 2) if all(a.size > 1 for a in arrs) else float("nan")
+        out["tests"] = {"welch_t": {"stat": round(float(t.statistic), 3), "p": float(t.pvalue)}, "mann_whitney": {"stat": float(u.statistic), "p": float(u.pvalue)}, "cohens_d": round(float(d), 3) if d == d else None}
+        out["note"] = "Two groups: Welch t-test (unequal variances) and Mann–Whitney U (rank-based, no normality assumption). Cohen's d is the standardised mean difference."
+    elif len(groups) > 2 and len(arrs) >= 2:
+        f = st.f_oneway(*arrs); k = st.kruskal(*arrs)
+        out["tests"] = {"anova": {"stat": round(float(f.statistic), 3), "p": float(f.pvalue)}, "kruskal": {"stat": round(float(k.statistic), 3), "p": float(k.pvalue)}}
+        pair = {}
+        names = [g for g, v in groups.items() if len(v) >= 2]
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                pair[f"{names[i]} vs {names[j]}"] = float(st.mannwhitneyu(groups[names[i]], groups[names[j]], alternative="two-sided").pvalue)
+        m = len(pair) or 1
+        out["tests"]["pairwise_mann_whitney_bonferroni"] = {k_: min(1.0, v * m) for k_, v in pair.items()}
+        out["note"] = "More than two groups: one-way ANOVA and Kruskal–Wallis, then pairwise Mann–Whitney with Bonferroni correction."
+    else:
+        out["note"] = "Assign at least two images to each of two groups to test."
+    return out
+
+
+def _correlate(x: str, y: str) -> dict:
+    from scipy import stats as st
+    pts = [(r.get(x), r.get(y), r["image"]) for r in SESSION["rows"]]
+    pts = [(float(a), float(b), n) for a, b, n in pts if a is not None and b is not None and a == a and b == b]
+    out = {"x": x, "y": y, "points": pts}
+    if len(pts) >= 3:
+        a = np.array([p[0] for p in pts]); b = np.array([p[1] for p in pts])
+        pr = st.pearsonr(a, b); sp = st.spearmanr(a, b); slope, inter = np.polyfit(a, b, 1)
+        out.update({"pearson_r": round(float(pr[0]), 3), "pearson_p": float(pr[1]), "spearman_rho": round(float(sp[0]), 3), "spearman_p": float(sp[1]), "slope": float(slope), "intercept": float(inter)})
+    return out
+
+
+def _report() -> Path:
+    from .report import build_report
+    assets = []
+    for rid in [r["id"] for r in SESSION["rows"]]:
+        a = SESSION["assets"].get(rid)
+        if not a: continue
+        cells = pd.read_csv(a["cells_csv"]) if a.get("cells_csv") and Path(a["cells_csv"]).exists() else None
+        assets.append({"summary": a["summary"], "qc": a.get("qc", []), "images": a.get("images", {}), "cells": cells})
+    stats = None
+    if any(r.get("group") for r in SESSION["rows"]):
+        stats = {"groups": {}, "tests": {}, "note": ""}
+        for m, _ in [("h_score", ""), ("pct_positive", ""), ("allred_total", ""), ("dab_area_fraction_pct", ""), ("mean_dab_od_tissue", "")]:
+            s = _stats(m); stats["groups"] = s["groups"] or stats["groups"]; stats["note"] = s["note"]
+            t = s["tests"]
+            if "welch_t" in t: stats["tests"][m] = {"test": "Welch t", "p": t["welch_t"]["p"]}
+            elif "anova" in t: stats["tests"][m] = {"test": "ANOVA", "p": t["anova"]["p"]}
+    out = OUT / f"ihcq_report_{time.strftime('%Y%m%d_%H%M')}.pdf"
+    rows = [{k: v for k, v in r.items() if k != "id"} for r in SESSION["rows"]]
+    build_report(assets, rows, stats, out)
+    return out
+
+
+def _calibrate(groups: dict) -> dict:
+    from .calibrate import fit_from_cells
+    od = {}
+    for cat, ids in groups.items():
+        arrs = [SESSION["cache"][i]["res"].cells["dab_od"].to_numpy() for i in ids if i in SESSION["cache"] and len(SESSION["cache"][i]["res"].cells)]
+        od[cat] = np.concatenate(arrs) if arrs else np.array([])
+    th, table = fit_from_cells(od)
+    return {"thresholds": {"weak": th.weak, "moderate": th.moderate, "strong": th.strong}, "table": table.to_dict(orient="records")}
 
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *a):  # quiet
+    def log_message(self, *a):
         pass
 
     def _send(self, code, body, ctype="application/json"):
@@ -74,139 +233,92 @@ class Handler(BaseHTTPRequestHandler):
         elif isinstance(body, str):
             body = body.encode()
         self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "no-store")
+        self.end_headers(); self.wfile.write(body)
+
+    def _file(self, p: Path, ctype: str, download=False):
+        if not p.exists():
+            return self._send(404, {"error": "not found"})
+        data = p.read_bytes()
+        self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(data)))
+        if download: self.send_header("Content-Disposition", f'attachment; filename="{p.name}"')
+        self.end_headers(); self.wfile.write(data)
 
     def do_GET(self):
-        u = urllib.parse.urlparse(self.path)
+        u = urllib.parse.urlparse(self.path); q = urllib.parse.parse_qs(u.query)
         if u.path == "/":
-            return self._send(200, PAGE, "text/html; charset=utf-8")
+            return self._file(STATIC / "index.html", "text/html; charset=utf-8")
+        if u.path.startswith("/static/"):
+            name = Path(u.path).name
+            ctype = {"css": "text/css", "js": "application/javascript", "svg": "image/svg+xml"}.get(name.rsplit(".", 1)[-1], "application/octet-stream")
+            return self._file(STATIC / name, ctype + ("; charset=utf-8" if ctype.startswith("text") or "javascript" in ctype else ""))
+        if u.path == "/api/demo" and (q.get("kind") or ["real"])[0] == "real":
+            from .io import _to_rgb8
+            rgb = _to_rgb8(np.array(Image.open(STATIC / "demo_ihc.png").convert("RGB")))
+            cfg = _cfg_from_query(q)
+            if not q.get("compartment"):
+                cfg.compartment, cfg.cell_statistic = "membrane", "p90"
+            out = _score(rgb, cfg, "demo_colon_membrane")
+            out["note"] = "Real IHC: colon epithelium, membranous DAB, hematoxylin counterstain (scikit-image reference image). Epithelial nests should read positive, the stroma between them negative."
+            return self._send(200, out)
         if u.path == "/api/demo":
             from .synth import make_field
-            q = urllib.parse.parse_qs(u.query)
-            rgb, truth, ts, _ = make_field(n_cells=350, fractions=(0.4, 0.2, 0.25, 0.15), seed=int(time.time()) % 1000)
-            out = _score(rgb, _cfg_from_query(q), "demo_field")
+            fr = {"negative": (1, 0, 0, 0), "low": (0.75, 0.15, 0.08, 0.02), "mixed": (0.4, 0.2, 0.25, 0.15), "high": (0.1, 0.1, 0.3, 0.5)}.get((q.get("kind") or ["mixed"])[0], (0.4, 0.2, 0.25, 0.15))
+            rgb, truth, ts, _ = make_field(n_cells=350, fractions=fr, seed=int(time.time()) % 1000)
+            out = _score(rgb, _cfg_from_query(q), "demo_" + (q.get("kind") or ["mixed"])[0])
             out["truth"] = {"h_score": ts["true_h_score"], "pct_positive": ts["true_pct_positive"], "n_cells": ts["true_n_cells"]}
             return self._send(200, out)
+        if u.path == "/api/stats":
+            return self._send(200, _stats((q.get("metric") or ["h_score"])[0]))
+        if u.path == "/api/correlate":
+            return self._send(200, _correlate((q.get("x") or ["pct_positive"])[0], (q.get("y") or ["h_score"])[0]))
+        if u.path == "/api/report":
+            try:
+                p = _report()
+            except Exception as e:
+                return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            return self._file(p, "application/pdf", download=True)
+        if u.path == "/api/session":
+            with SESSION["lock"]:
+                return self._send(200, {"rows": SESSION["rows"], "cached": list(SESSION["cache"].keys())})
         if u.path.startswith("/out/"):
-            p = (OUT / Path(u.path[5:]).name)
-            if not p.exists():
-                return self._send(404, {"error": "not found"})
-            ctype = "image/png" if p.suffix == ".png" else "text/csv"
-            data = p.read_bytes()
-            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(data)))
-            if p.suffix == ".csv":
-                self.send_header("Content-Disposition", f'attachment; filename="{p.name}"')
-            self.end_headers(); self.wfile.write(data); return
+            p = OUT / Path(u.path[5:]).name
+            return self._file(p, "image/png" if p.suffix == ".png" else "text/csv", download=p.suffix == ".csv")
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
-        u = urllib.parse.urlparse(self.path)
-        q = urllib.parse.parse_qs(u.query)
-        if u.path == "/api/quit":
-            self._send(200, {"ok": True})
-            threading.Thread(target=SESSION["server"].shutdown, daemon=True).start()
-            return
-        if u.path == "/api/score":
-            n = int(self.headers.get("Content-Length", 0))
-            raw = self.rfile.read(n)
-            name = (q.get("name", ["image"]) or ["image"])[0]
-            try:
+        u = urllib.parse.urlparse(self.path); q = urllib.parse.parse_qs(u.query)
+        n = int(self.headers.get("Content-Length", 0)); raw = self.rfile.read(n) if n else b""
+        try:
+            if u.path == "/api/quit":
+                self._send(200, {"ok": True}); threading.Thread(target=SESSION["server"].shutdown, daemon=True).start(); return
+            if u.path == "/api/score":
                 from .io import _to_rgb8
-                from PIL import Image
-                import io as _io
                 Image.MAX_IMAGE_PIXELS = None
                 with Image.open(_io.BytesIO(raw)) as im:
                     rgb = _to_rgb8(np.array(im.convert("RGB")))
-                cfg = _cfg_from_query(q)
-                out = _score(rgb, cfg, Path(name).stem)
-                return self._send(200, out)
-            except Exception as e:
-                return self._send(400, {"error": f"{type(e).__name__}: {e}"})
+                name = (q.get("name") or ["image"])[0]
+                return self._send(200, _score(rgb, _cfg_from_query(q), Path(name).stem))
+            if u.path == "/api/rebin":
+                th = Thresholds(float(q["weak"][0]), float(q["moderate"][0]), float(q["strong"][0])); th.validate()
+                return self._send(200, _rebin(q["id"][0], th))
+            if u.path == "/api/reanalyze":
+                return self._send(200, _reanalyze(q["id"][0], _cfg_from_query(q)))
+            if u.path == "/api/group":
+                body = json.loads(raw or b"{}"); rid, grp = body.get("id"), (body.get("group") or "").strip()
+                SESSION["groups"][rid] = grp
+                with SESSION["lock"]:
+                    for r in SESSION["rows"]:
+                        if r["id"] == rid: r["group"] = grp
+                    if rid in SESSION["assets"] and "summary" in SESSION["assets"][rid]: SESSION["assets"][rid]["summary"]["group"] = grp
+                    pd.DataFrame(SESSION["rows"]).drop(columns=["id"]).to_csv(OUT / "session_results.csv", index=False)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/calibrate":
+                body = json.loads(raw or b"{}")
+                return self._send(200, _calibrate(body.get("groups", {})))
+        except Exception as e:
+            return self._send(400, {"error": f"{type(e).__name__}: {e}"})
         return self._send(404, {"error": "not found"})
-
-
-PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>ihcq</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-:root{--bg:#f4f5f2;--card:#fff;--ink:#16191a;--mut:#6b746e;--line:#d6dcd3;--acc:#1b3fa0;--dab:#7a3b12;--warn:#a96d08;--bad:#c22f4c}
-@media(prefers-color-scheme:dark){:root{--bg:#111416;--card:#1a1f22;--ink:#e8ede9;--mut:#8d978f;--line:#2c3336;--acc:#7fa4ff;--dab:#d9a06b;--warn:#e2a544;--bad:#ff7e93}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,system-ui,sans-serif}
-header{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line)}
-header b{font-size:18px;letter-spacing:-.02em}header span{color:var(--mut);font-size:12px}header .sp{flex:1}
-button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:7px 12px;border-radius:7px;cursor:pointer}
-button.p{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5}
-main{display:grid;grid-template-columns:320px 1fr;gap:16px;padding:16px 20px;max-width:1400px;margin:0 auto}
-@media(max-width:860px){main{grid-template-columns:1fr}}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}.card+.card{margin-top:12px}
-h3{margin:0 0 10px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);font-weight:600}
-label{display:block;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;margin:8px 0 3px}
-input,select{width:100%;font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
-.row{display:flex;gap:8px}.row>*{flex:1;min-width:0}
-.drop{border:2px dashed var(--line);border-radius:10px;padding:26px 14px;text-align:center;cursor:pointer;color:var(--mut)}
-.drop.over,.drop:hover{border-color:var(--acc);color:var(--ink)}.drop b{display:block;color:var(--ink);font-size:15px;margin-bottom:4px}
-.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
-.big div{border:1px solid var(--line);border-radius:8px;padding:10px 12px}.big b{display:block;font-size:30px;font-weight:600;letter-spacing:-.02em;line-height:1.1}
-.big span{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
-.qc{margin-top:10px;font-size:13px}.qc div{padding:6px 10px;border-left:3px solid var(--warn);background:color-mix(in srgb,var(--warn) 10%,transparent);border-radius:0 6px 6px 0;margin-bottom:5px}
-.tabs{display:flex;gap:6px;margin:12px 0 8px}.tabs button[aria-pressed=true]{background:var(--acc);border-color:var(--acc);color:#fff}
-img.ov{width:100%;border:1px solid var(--line);border-radius:8px;background:#fff}
-table{border-collapse:collapse;width:100%;font-size:12.5px;font-variant-numeric:tabular-nums}th,td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--mut);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}td.n,th.n{text-align:right}
-.tw{overflow:auto}.mut{color:var(--mut);font-size:12.5px}.busy{color:var(--acc)}a{color:var(--acc)}
-</style></head><body>
-<header><b>ihcq</b><span>chromogenic IHC quantification · everything stays on this Mac</span><div class="sp"></div>
-<button id="demo">Score a demo field</button><button id="quit" title="Stop the local server">Quit</button></header>
-<main>
-<section>
- <div class="card"><h3>Images</h3>
-  <div class="drop" id="drop"><b>Drop IHC images here</b>PNG · JPG · TIFF — or click to choose. Several at once is fine.<input id="file" type="file" accept="image/*" multiple hidden></div>
-  <p class="mut" id="status" style="margin:10px 0 0">Waiting for an image.</p></div>
- <div class="card"><h3>Analysis</h3>
-  <label>Compartment</label><select id="compartment"><option value="nuclear">Nuclear (Ki-67, ER, PR, p53)</option><option value="membrane">Membrane (HER2, PD-L1)</option><option value="cytoplasm">Cytoplasm</option></select>
-  <div class="row"><div><label>Pixel size (µm/px)</label><input id="mpp" type="number" step="0.01" placeholder="e.g. 0.25"></div><div><label>or nuclear radius (px)</label><input id="radius" type="number" step="1" placeholder="8"></div></div>
-  <label>Nucleus finder</label><select id="backend"><option value="watershed">Classical (fast, no model)</option><option value="hybrid">Hybrid — StarDist + classical (best overall)</option><option value="stardist">StarDist only (precise on well-stained tissue)</option></select>
-  <label>Per-cell statistic</label><select id="statistic"><option value="mean">Mean DAB OD</option><option value="median">Median</option><option value="p90">90th percentile (punctate / membrane)</option></select>
- </div>
- <div class="card"><h3>Intensity cut points (DAB OD)</h3>
-  <div class="row"><div><label>0 / 1+</label><input id="weak" type="number" step="0.01" value="0.15"></div><div><label>1+ / 2+</label><input id="moderate" type="number" step="0.01" value="0.40"></div><div><label>2+ / 3+</label><input id="strong" type="number" step="0.01" value="0.80"></div></div>
-  <p class="mut" style="margin:8px 0 0">Defaults are a starting point only. Calibrate on control tissue (<code>ihcq calibrate</code>) before reporting.</p></div>
- <div class="card"><h3>Session</h3><p class="mut" id="sess">No results yet.</p><p style="margin:8px 0 0"><a id="dl" href="/out/session_results.csv" download hidden>Download all results (CSV)</a></p></div>
-</section>
-<section>
- <div class="card" id="result"><h3>Result</h3><p class="mut">Drop an image, or press <em>Score a demo field</em> to see the output on a synthetic slide with known truth.</p></div>
- <div class="card"><h3>This session</h3><div class="tw"><table id="tbl"><thead><tr><th>image</th><th class="n">cells</th><th class="n">% +</th><th class="n">H-score</th><th class="n">Allred</th><th class="n">DAB area %</th><th>flags</th></tr></thead><tbody></tbody></table></div></div>
-</section></main>
-<script>
-const $=s=>document.querySelector(s);const status=$('#status');
-function opts(name){const p=new URLSearchParams();for(const k of['compartment','backend','statistic','mpp','radius','weak','moderate','strong']){const v=$('#'+k).value;if(v!=='')p.set(k,v)}if(name)p.set('name',name);return p.toString()}
-function fmt(v,d=1){return (v===null||v===undefined||Number.isNaN(v))?'—':(typeof v==='number'?v.toFixed(d):v)}
-function render(r){const s=r.summary;const R=$('#result');
- const truth=r.truth?`<p class="mut">Synthetic field — truth: H=${r.truth.h_score}, ${r.truth.pct_positive}% positive, ${r.truth.n_cells} cells.</p>`:'';
- R.innerHTML=`<h3>Result · ${s.image}</h3><div class="big">
-  <div><b>${fmt(s.h_score,0)}</b><span>H-score</span></div><div><b>${fmt(s.pct_positive)}%</b><span>positive cells</span></div>
-  <div><b>${fmt(s.allred_total,0)}</b><span>Allred</span></div><div><b>${fmt(s.dab_area_fraction_pct)}%</b><span>DAB area</span></div>
-  <div><b>${fmt(s.n_cells,0)}</b><span>nuclei</span></div><div><b>${fmt(s.mean_dab_od_tissue,3)}</b><span>mean DAB OD</span></div></div>${truth}
-  <p class="mut" style="margin-top:8px">Stain check: ${s.second_stain==='dab'?'second stain is <b>DAB</b> — chromogenic IHC ✓':s.second_stain==='eosin'?'<b style="color:var(--bad)">second stain is eosin — this is H&amp;E; DAB scores are not meaningful</b>':'second stain <b>unrecognised</b> — check the stain-separation overlay'} (${s.second_stain_angle_to_dab}° from DAB, ${s.second_stain_angle_to_eosin}° from eosin)</p>
-  <div class="qc">${(r.qc||[]).map(f=>`<div>${f}</div>`).join('')}</div>
-  <div class="tabs">${Object.keys(r.overlays).map((k,i)=>`<button data-k="${k}" aria-pressed="${i===0}">${{cells:'Cells by bin',positivity:'Positivity map',stains:'Stain separation'}[k]||k}</button>`).join('')}</div>
-  <img class="ov" id="ov" src="${Object.values(r.overlays)[0]}">
-  <p class="mut" style="margin-top:8px">${r.cells_csv?`<a href="${r.cells_csv}" download>Per-cell table (CSV)</a> · `:''}bins 1+/2+/3+ at ${s.thr_weak}/${s.thr_moderate}/${s.thr_strong} OD · ${s.compartment} · ${s.seconds}s</p>`;
- R.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{R.querySelectorAll('.tabs button').forEach(x=>x.setAttribute('aria-pressed','false'));b.setAttribute('aria-pressed','true');$('#ov').src=r.overlays[b.dataset.k]});
- const tr=document.createElement('tr');tr.innerHTML=`<td>${s.image}</td><td class="n">${fmt(s.n_cells,0)}</td><td class="n">${fmt(s.pct_positive)}</td><td class="n">${fmt(s.h_score)}</td><td class="n">${fmt(s.allred_total,0)}</td><td class="n">${fmt(s.dab_area_fraction_pct,2)}</td><td class="mut">${(r.qc||[]).length?r.qc.length+' flag'+(r.qc.length>1?'s':''):''}</td>`;
- $('#tbl tbody').prepend(tr);$('#sess').textContent=`${r.n_session} image${r.n_session>1?'s':''} scored.`;$('#dl').hidden=false}
-async function scoreFiles(files){for(const f of files){status.innerHTML=`<span class="busy">Scoring ${f.name}…</span> ${$('#backend').value==='stardist'?'(first StarDist run downloads the model)':''}`;
- try{const r=await fetch('/api/score?'+opts(f.name),{method:'POST',body:f});const j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);render(j);status.textContent=`Scored ${f.name}.`}
- catch(e){status.innerHTML=`<span style="color:var(--bad)">${f.name}: ${e.message}</span>`}}}
-const drop=$('#drop'),file=$('#file');drop.onclick=()=>file.click();file.onchange=()=>scoreFiles([...file.files]);
-['dragenter','dragover'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('over')}));
-['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('over')}));
-drop.addEventListener('drop',ev=>scoreFiles([...ev.dataTransfer.files].filter(f=>f.type.startsWith('image/')||/\.tiff?$/i.test(f.name))));
-$('#demo').onclick=async()=>{status.innerHTML='<span class="busy">Scoring a synthetic field…</span>';const r=await fetch('/api/demo?'+opts());render(await r.json());status.textContent='Demo field scored.'};
-$('#quit').onclick=async()=>{await fetch('/api/quit',{method:'POST'});document.body.innerHTML='<p style="padding:40px;font:15px system-ui">ihcq stopped. You can close this tab.</p>'};
-</script></body></html>"""
 
 
 def _port_open(host, port) -> bool:
@@ -218,8 +330,7 @@ def main(open_browser: bool = True, port: int = PORT):
     url = f"http://{HOST}:{port}/"
     if _port_open(HOST, port):
         print(f"ihcq is already running at {url}")
-        if open_browser:
-            webbrowser.open(url)
+        if open_browser: webbrowser.open(url)
         return
     server = ThreadingHTTPServer((HOST, port), Handler)
     SESSION["server"] = server

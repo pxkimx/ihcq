@@ -62,6 +62,15 @@ def calibrate(groups: dict, base: Config | None = None, estimate_stains: bool = 
             m = estimate_stain_vectors(load_image(pool[0]))
             cfg.stain_vectors = [list(map(float, m[0])), list(map(float, m[1]))]
     od = {c: collect_cell_od(groups.get(c, []), cfg) for c in CATS}
+    th, table = fit_from_cells(od, negative_margin)
+    cfg.thresholds = th
+    cfg.profile_name = name
+    return cfg.validate(), table
+
+
+def fit_from_cells(od: dict, negative_margin: float = 1.15) -> tuple[Thresholds, pd.DataFrame]:
+    """Fit cut points from per-cell DAB OD arrays keyed by control category."""
+    od = {c: np.asarray(od.get(c, np.array([]))) for c in CATS}
     d = Thresholds()
 
     # 0 / 1+: nothing in the negative control may be called positive
@@ -74,8 +83,7 @@ def calibrate(groups: dict, base: Config | None = None, estimate_stains: bool = 
     strong = _between(pos["moderate"], pos["strong"], d.strong)
     moderate = max(moderate, weak + 0.05)
     strong = max(strong, moderate + 0.05)
-    cfg.thresholds = Thresholds(weak=weak, moderate=moderate, strong=strong)
-    cfg.profile_name = name
+    th = Thresholds(weak=weak, moderate=moderate, strong=strong)
 
     rows = []
     for c in CATS:
@@ -84,7 +92,8 @@ def calibrate(groups: dict, base: Config | None = None, estimate_stains: bool = 
                      "note": "all cells" if c == "negative" else f"positive cells (≥{weak})",
                      **({"p10": round(float(np.percentile(v, 10)), 3), "median": round(float(np.median(v)), 3),
                          "p90": round(float(np.percentile(v, 90)), 3)} if v.size else {"p10": None, "median": None, "p90": None})})
-    return cfg.validate(), pd.DataFrame(rows)
+    th.validate()
+    return th, pd.DataFrame(rows)
 
 
 def _predict(cells_od: list, th: Thresholds, target: str) -> np.ndarray:

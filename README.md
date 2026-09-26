@@ -38,25 +38,40 @@ The classical backend needs none of this and runs anywhere the core installs.
 ihcq app                    # opens http://127.0.0.1:8765 in your browser
 ```
 
-Drop images, set the compartment, pixel size and cut points, and read the
-scores with the three QC overlays; every image scored in a session goes into
-one downloadable CSV. Nothing leaves the machine — it is a local server on
-the loopback interface with no dependencies beyond ihcq itself.
+`IHCQ.app` on the Desktop (rebuild with `scripts/build_app.sh`) launches
+the same thing with a click. It is a local server on the loopback
+interface; nothing leaves the machine. What it does:
 
-`IHCQ.app` (built by `scripts/build_app.sh`, or already on the Desktop) is a
-double-clickable launcher for the same thing. It uses `.venv-dl`
-when it exists, so the StarDist backend is available in the
-menu; otherwise it uses the base Python and the classical backend. Logs go
-to `~/Library/Logs/ihcq.log`; the *Quit* button in the page stops the server.
+- **Score** — drop any number of images (a queue with per-file status), or
+  open the built-in demo: a real colon field with membranous DAB, or
+  synthetic fields with known truth. Presets for nuclear, membrane,
+  cytoplasmic and pixel-only markers; every setting exposed; **Re-analyze**
+  re-runs the current image when you change compartment, finder, scale or
+  statistic. Results as colour-coded tiles, a stain-identity badge, and QC
+  flags.
+- **Viewer** — original / labelled nuclei / positivity layers with opacity,
+  scroll-zoom and drag-pan, and hover on any nucleus for its bin, DAB and
+  hematoxylin OD.
+- **Live cut points** — a per-cell DAB histogram with three draggable cut
+  points; H-score, % positive, Allred and the bin composition update as you
+  drag; *Apply* re-bins the image and its overlays.
+- **Downloads** — original, labelled-nuclei overlay, positivity map and
+  stain-separation panels as separate PNGs; per-cell and session CSVs;
+  profile JSON to reuse with `ihcq score --profile`.
+- **Session** — sortable table, bin-composition and H-score plots per
+  image, copy as TSV. Give images a **group** to unlock *Compare groups*
+  (box + strip plots; Welch t-test, Mann–Whitney, Cohen's d for two groups;
+  ANOVA and Kruskal–Wallis with Bonferroni-corrected pairwise tests for
+  more) and *Correlate* (scatter with Pearson and Spearman).
+- **PDF report** — cover table, one page per image with all four panels,
+  metrics, flags and its DAB histogram, a between-group statistics page, and
+  a methods page.
+- **Calibrate** — mark scored images as negative / 1+ / 2+ / 3+ controls,
+  fit the cut points, apply them to everything scored so far.
 
-## Sixty-second tour
-
-```bash
-ihcq demo -o demo/                               # synthetic slides with known truth, scored end to end
-ihcq inspect demo/mixed.png                      # OD histogram + white point: are the default cuts sane?
-ihcq score demo/*.png -o results.csv --overlays qc/ --cells-dir cells/
-open qc/mixed_cells.png                          # every nucleus outlined in its bin colour
-```
+The launcher uses `.venv-dl` when it exists (hybrid and StarDist finders
+available in the menu); otherwise the base Python and the classical finder.
+Logs go to `~/Library/Logs/ihcq.log`; *Quit* stops the server.
 
 ## What is measured, and how
 

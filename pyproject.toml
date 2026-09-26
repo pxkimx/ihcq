@@ -25,3 +25,6 @@ ihcq = "ihcq.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["ihcq*"]
+
+[tool.setuptools.package-data]
+ihcq = ["static/*"]
