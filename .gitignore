@@ -5,6 +5,6 @@ data/
 results/
 .DS_Store
 app_icon.png
-IHCQ.icns
-IHCQ.app/
+IHCq.icns
+IHCq.app/
 .venv-dl/

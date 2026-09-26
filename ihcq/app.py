@@ -329,12 +329,12 @@ def _port_open(host, port) -> bool:
 def main(open_browser: bool = True, port: int = PORT):
     url = f"http://{HOST}:{port}/"
     if _port_open(HOST, port):
-        print(f"ihcq is already running at {url}")
+        print(f"IHCq is already running at {url}")
         if open_browser: webbrowser.open(url)
         return
     server = ThreadingHTTPServer((HOST, port), Handler)
     SESSION["server"] = server
-    print(f"ihcq app at {url}   (outputs in {OUT})")
+    print(f"IHCq app at {url}   (outputs in {OUT})")
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:

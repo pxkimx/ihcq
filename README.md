@@ -1,4 +1,4 @@
-# ihcq — chromogenic IHC quantification
+# IHCq — chromogenic IHC quantification
 
 Reproducible scoring of DAB-stained immunohistochemistry from ordinary image
 files: **H-score**, **Allred**, **positivity area fraction**, **optical density**
@@ -38,7 +38,7 @@ The classical backend needs none of this and runs anywhere the core installs.
 ihcq app                    # opens http://127.0.0.1:8765 in your browser
 ```
 
-`IHCQ.app` on the Desktop (rebuild with `scripts/build_app.sh`) launches
+`IHCq.app` on the Desktop (rebuild with `scripts/build_app.sh`) launches
 the same thing with a click. It is a local server on the loopback
 interface; nothing leaves the machine. What it does:
 

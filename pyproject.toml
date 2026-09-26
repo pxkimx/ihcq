@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ihcq"
 version = "0.1.0"
-description = "Reproducible chromogenic IHC quantification: H-score, Allred, positivity area fraction and optical density"
+description = "IHCq — reproducible chromogenic IHC quantification: H-score, Allred, positivity area fraction and optical density"
 requires-python = ">=3.9"
 dependencies = [
     "numpy>=1.24",

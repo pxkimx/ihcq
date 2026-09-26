@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rebuild IHCQ.app (icon + bundle) and copy it to the Desktop.
+# Rebuild IHCq.app (icon + bundle) and copy it to the Desktop.
 set -e
 cd "$(dirname "$0")/.."
 python3 - <<'PY'
@@ -15,15 +15,15 @@ for i, (x, y) in enumerate(pts):
     r = random.uniform(44, 58); brown = i in (3, 8, 12, 17, 20)
     d.ellipse([x - r, y - r * .85, x + r, y + r * .85], fill=(110, 58, 22, 255) if brown else (92, 110, 190, 255))
     if not brown: d.ellipse([x - r * .55, y - r * .45, x + r * .55, y + r * .45], fill=(122, 138, 210, 255))
-im.save("app_icon.png"); os.makedirs("IHCQ.iconset", exist_ok=True)
+im.save("app_icon.png"); os.makedirs("IHCq.iconset", exist_ok=True)
 for sz in (16, 32, 128, 256, 512):
-    im.resize((sz, sz), Image.LANCZOS).save(f"IHCQ.iconset/icon_{sz}x{sz}.png")
-    im.resize((sz * 2, sz * 2), Image.LANCZOS).save(f"IHCQ.iconset/icon_{sz}x{sz}@2x.png")
+    im.resize((sz, sz), Image.LANCZOS).save(f"IHCq.iconset/icon_{sz}x{sz}.png")
+    im.resize((sz * 2, sz * 2), Image.LANCZOS).save(f"IHCq.iconset/icon_{sz}x{sz}@2x.png")
 PY
-iconutil -c icns IHCQ.iconset -o IHCQ.icns && rm -rf IHCQ.iconset
-mkdir -p IHCQ.app/Contents/MacOS IHCQ.app/Contents/Resources
-cp IHCQ.icns IHCQ.app/Contents/Resources/IHCQ.icns
-cp scripts/Info.plist IHCQ.app/Contents/Info.plist
-cp scripts/launcher.sh IHCQ.app/Contents/MacOS/IHCQ && chmod +x IHCQ.app/Contents/MacOS/IHCQ
-rm -rf "$HOME/Desktop/IHCQ.app" && cp -R IHCQ.app "$HOME/Desktop/IHCQ.app" && touch "$HOME/Desktop/IHCQ.app"
-echo "IHCQ.app rebuilt and copied to the Desktop"
+iconutil -c icns IHCq.iconset -o IHCq.icns && rm -rf IHCq.iconset
+mkdir -p IHCq.app/Contents/MacOS IHCq.app/Contents/Resources
+cp IHCq.icns IHCq.app/Contents/Resources/IHCq.icns
+cp scripts/Info.plist IHCq.app/Contents/Info.plist
+cp scripts/launcher.sh IHCq.app/Contents/MacOS/IHCq && chmod +x IHCq.app/Contents/MacOS/IHCq
+rm -rf "$HOME/Desktop/IHCq.app" && cp -R IHCq.app "$HOME/Desktop/IHCq.app" && touch "$HOME/Desktop/IHCq.app"
+echo "IHCq.app rebuilt and copied to the Desktop"
