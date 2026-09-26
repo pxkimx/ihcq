@@ -88,3 +88,16 @@ def test_calibration_keeps_negative_control_negative(tmp_path):
         rows.append({"image": str(p), "h_score": ts["true_h_score"]})
     cfg2, tab = fit_to_scores(pd.DataFrame(rows), grid_step=0.1)
     assert tab["abs_error"].mean() < 8
+
+
+def test_stain_identity_flags_he():
+    from ihcq.stains import stain_matrix
+    he = stain_matrix(("hematoxylin", "eosin"))
+    # hematoxylin nuclei, eosin cytoplasm: the second-stain slot rendered with the eosin vector
+    rgb_he, *_ = make_field(n_cells=250, fractions=(1, 0, 0, 0), seed=8, matrix=he, second_stain_cyto_od=0.45)
+    r = analyze(rgb_he, Config())
+    assert r.summary["second_stain"] == "eosin" and r.summary["scores_valid"] is False
+    assert any("H&E" in f for f in r.qc)
+    rgb_ihc, *_ = make_field(n_cells=250, seed=8)
+    r2 = analyze(rgb_ihc, Config())
+    assert r2.summary["second_stain"] == "dab" and r2.summary["scores_valid"] is True

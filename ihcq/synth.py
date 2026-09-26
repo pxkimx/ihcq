@@ -18,12 +18,16 @@ BIN_OD = {0: (0.0, 0.08), 1: (0.20, 0.34), 2: (0.48, 0.72), 3: (0.95, 1.45)}
 
 
 def make_field(n_cells=400, fractions=(0.4, 0.2, 0.25, 0.15), size=(768, 1024), seed=0,
-               matrix=None, noise=2.5, blur=0.7, radius=(6, 10), dab_cyto=0.0) -> tuple[np.ndarray, pd.DataFrame, dict]:
-    """Return (rgb, truth_cells, truth_summary).
+               matrix=None, noise=2.5, blur=0.7, radius=(6, 10), dab_cyto=0.0,
+               second_stain_cyto_od=0.0) -> tuple[np.ndarray, pd.DataFrame, dict]:
+    """Return (rgb, truth_cells, truth_summary, aux).
 
     fractions: proportion of cells in bins 0, 1+, 2+, 3+.
     dab_cyto: extra DAB OD painted as diffuse cytoplasm around positive cells
               (raises pixel area fraction without changing the cell H-score).
+    second_stain_cyto_od: paint the second stain at this OD over all tissue
+              outside nuclei — with an H&E matrix this makes a synthetic H&E
+              field (eosinophilic cytoplasm, hematoxylin nuclei).
     """
     rng = np.random.default_rng(seed)
     H, W = size
@@ -74,6 +78,11 @@ def make_field(n_cells=400, fractions=(0.4, 0.2, 0.25, 0.15), size=(768, 1024), 
         rows.append({"y": round(y, 1), "x": round(x, 1), "true_bin": int(b), "true_dab_od": round(d_od, 3)})
     truth = pd.DataFrame(rows)
 
+    if second_stain_cyto_od > 0:
+        nuc = truth_dab > 0
+        nuc = nuc | (hema > 0.3)
+        cyto = tissue & ~nuc
+        dab[cyto] = np.maximum(dab[cyto], second_stain_cyto_od * (1 + 0.2 * np.sin(xx[cyto] / 23.0) * np.cos(yy[cyto] / 31.0)))
     conc = np.stack([hema, dab, np.zeros_like(dab)], axis=-1)
     od = conc.reshape(-1, 3) @ matrix
     # uneven illumination: white point varies 238–252 across the field

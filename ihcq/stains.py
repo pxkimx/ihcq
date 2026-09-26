@@ -133,8 +133,40 @@ def estimate_stain_vectors(rgb: np.ndarray, od_min: float = 0.15, alpha: float =
     v1 = basis @ np.array([np.cos(lo), np.sin(lo)])
     v2 = basis @ np.array([np.cos(hi), np.sin(hi)])
     v1, v2 = _unit(np.abs(v1)), _unit(np.abs(v2))
-    # Hematoxylin absorbs red and green and transmits blue, so its OD vector
-    # has the smaller blue component; DAB absorbs blue most. Rows: (hema, dab).
-    if v1[2] > v2[2]:
+    # Row 0 is whichever fitted vector is closer to textbook hematoxylin; the
+    # other is the second stain (DAB, eosin, ...).  A colour-component rule
+    # ("hematoxylin has less blue") fails for eosin, which has less still.
+    h = _unit(STAIN_VECTORS["hematoxylin"])
+    if v1 @ h < v2 @ h:
         v1, v2 = v2, v1
     return stain_matrix(vectors=[v1, v2])
+
+
+def identify_second_stain(rgb: np.ndarray, i0=None) -> dict:
+    """What is the non-hematoxylin stain on this image?
+
+    Fits the two dominant stain vectors (Macenko) and compares the second one
+    with the textbook DAB and eosin vectors.  On chromogenic IHC the second
+    vector sits within ~20° of DAB and >40° from eosin; on H&E it is the
+    reverse.  Returns {"stain": "dab" | "eosin" | "unknown", "angle_to_dab",
+    "angle_to_eosin"}; "unknown" covers a field with too little second stain
+    to fit (a fully negative IHC field looks like this) or an ambiguous
+    vector (melanin and some red chromogens land between the two).
+    """
+    try:
+        m = estimate_stain_vectors(rgb, i0=i0)
+    except ValueError:
+        return {"stain": "unknown", "angle_to_dab": None, "angle_to_eosin": None}
+    v = m[1]
+    dab, eos = _unit(STAIN_VECTORS["dab"]), _unit(STAIN_VECTORS["eosin"])
+    a_d = float(np.degrees(np.arccos(np.clip(v @ dab, -1, 1))))
+    a_e = float(np.degrees(np.arccos(np.clip(v @ eos, -1, 1))))
+    # DAB IHC fields measured so far sit 2–19° from DAB; H&E fields 9–30° from
+    # eosin.  A confident call needs both a small angle and clear separation.
+    if a_d < 20 and a_e - a_d > 10:
+        stain = "dab"
+    elif a_e < 30 and a_d - a_e > 5:
+        stain = "eosin"
+    else:
+        stain = "unknown"
+    return {"stain": stain, "angle_to_dab": round(a_d, 1), "angle_to_eosin": round(a_e, 1)}

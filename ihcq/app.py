@@ -189,6 +189,7 @@ function render(r){const s=r.summary;const R=$('#result');
   <div><b>${fmt(s.h_score,0)}</b><span>H-score</span></div><div><b>${fmt(s.pct_positive)}%</b><span>positive cells</span></div>
   <div><b>${fmt(s.allred_total,0)}</b><span>Allred</span></div><div><b>${fmt(s.dab_area_fraction_pct)}%</b><span>DAB area</span></div>
   <div><b>${fmt(s.n_cells,0)}</b><span>nuclei</span></div><div><b>${fmt(s.mean_dab_od_tissue,3)}</b><span>mean DAB OD</span></div></div>${truth}
+  <p class="mut" style="margin-top:8px">Stain check: ${s.second_stain==='dab'?'second stain is <b>DAB</b> — chromogenic IHC ✓':s.second_stain==='eosin'?'<b style="color:var(--bad)">second stain is eosin — this is H&amp;E; DAB scores are not meaningful</b>':'second stain <b>unrecognised</b> — check the stain-separation overlay'} (${s.second_stain_angle_to_dab}° from DAB, ${s.second_stain_angle_to_eosin}° from eosin)</p>
   <div class="qc">${(r.qc||[]).map(f=>`<div>${f}</div>`).join('')}</div>
   <div class="tabs">${Object.keys(r.overlays).map((k,i)=>`<button data-k="${k}" aria-pressed="${i===0}">${{cells:'Cells by bin',positivity:'Positivity map',stains:'Stain separation'}[k]||k}</button>`).join('')}</div>
   <img class="ov" id="ov" src="${Object.values(r.overlays)[0]}">

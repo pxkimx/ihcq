@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
-from .stains import stain_matrix, find_white, deconvolve
+from .stains import stain_matrix, find_white, deconvolve, identify_second_stain
 from .tissue import tissue_mask, saturation_fraction
 from .nuclei import segment_nuclei, compartment_masks, assumed_radius, _median_radius
 from .metrics import per_cell_table, cell_summary, pixel_summary
@@ -32,6 +32,11 @@ class Result:
 
 def _qc_flags(summary: dict, cfg: Config) -> list:
     flags = []
+    st = summary.get("second_stain")
+    if st == "eosin":
+        flags.append("second stain is eosin — this looks like H&E, not DAB IHC: positivity, H-score and DAB area are NOT meaningful here; nuclear counts, density and size still are")
+    elif st == "unknown" and summary.get("dab_area_fraction_pct", 0) > 2:
+        flags.append("second stain matches neither DAB nor eosin (melanin? a red chromogen?) — check the stain-separation overlay before trusting DAB scores")
     if summary["saturated_fraction"] > 0.02:
         flags.append(f"{summary['saturated_fraction']*100:.1f}% of tissue pixels clipped — over-exposed scan; OD unreliable")
     if summary["tissue_fraction"] < 0.05:
@@ -68,8 +73,10 @@ def analyze(rgb: np.ndarray, cfg: Config | None = None) -> Result:
     hema, dab = conc[..., 0], conc[..., 1]
     tissue = tissue_mask(conc.sum(-1), cfg.tissue_od_threshold, cfg.tissue_min_size_px, smooth_sigma=cfg.tissue_smooth_sigma)
 
+    ident = identify_second_stain(rgb, white)
     summary = {
         "height": rgb.shape[0], "width": rgb.shape[1],
+        "second_stain": ident["stain"], "second_stain_angle_to_dab": ident["angle_to_dab"], "second_stain_angle_to_eosin": ident["angle_to_eosin"],
         "white_point": [round(float(v), 1) for v in white], "white_point_source": white_src,
         "saturated_fraction": round(saturation_fraction(rgb, tissue), 4),
     }
@@ -89,12 +96,22 @@ def analyze(rgb: np.ndarray, cfg: Config | None = None) -> Result:
         est = _median_radius(labels)
         summary["assumed_nucleus_radius_px"] = assumed_radius(cfg)
         summary["median_nucleus_radius_px"] = round(est, 1) if est else None
+        # nuclear morphology — meaningful on any hematoxylin-stained section, H&E included
+        if len(cells):
+            summary["mean_nucleus_area_px"] = round(float(cells["area_px"].mean()), 1)
+            summary["nuclear_area_fraction_pct"] = round(float((labels > 0)[tissue].mean() * 100), 2)
+            summary["mean_nucleus_hema_od"] = round(float(cells["hema_od"].mean()), 4)
+            if cfg.mpp:
+                summary["mean_nucleus_area_um2"] = round(float(cells["area_px"].mean()) * cfg.mpp ** 2, 2)
 
     summary.update({
         "thr_weak": cfg.thresholds.weak, "thr_moderate": cfg.thresholds.moderate, "thr_strong": cfg.thresholds.strong,
         "compartment": cfg.compartment, "cell_statistic": cfg.cell_statistic, "profile": cfg.profile_name,
         "seconds": round(time.time() - t0, 2),
     })
+    # DAB-derived scores are only meaningful when the chromogen really is DAB
+    summary["scores_valid"] = not (summary["second_stain"] == "eosin" or
+                                   (summary["second_stain"] == "unknown" and (summary.get("dab_area_fraction_pct") or 0) > 2))
     res = Result(summary, cells, conc, tissue, labels, score_labels, matrix, white, cfg)
     res.qc = _qc_flags(summary, cfg)
     summary["qc_flags"] = " | ".join(res.qc)

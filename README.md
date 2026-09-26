@@ -189,6 +189,28 @@ nuclei twice the radius of the rest of the set (≈16 px); at the default
 that to 58 — better, not fixed, because those large pale nuclei have
 internal texture that also splits a distance-transform watershed.
 
+### Handing it the wrong stain (H&E)
+
+Tested on **HERE101** (101 pathologist-annotated H&E fields, 25 tissue
+sites). An IHC tool given H&E should say so, not invent a score. Eosin is
+not orthogonal to DAB, so a purely eosinophilic field can read as heavily
+"positive" (skeletal muscle: 81 % of cells, 51 % DAB area). Every image is
+therefore checked: the two dominant stain vectors are fitted and the second
+is compared with DAB and eosin. On all 101 H&E fields it lies 9–30° from
+eosin; on every DAB field tested, 2–19° from DAB. The result is written to
+`second_stain` and `scores_valid`, and an H&E field carries a loud QC flag
+— 100 of 101 were caught; the last has 2.8 % spurious positivity. Two
+honest gaps: **melanin** is genuinely brown and reads as "unrecognised",
+not as DAB, so it is flagged but not identified; and a *fully negative* IHC
+field has no second stain to fit and reads "unknown" with ~0 % DAB area,
+which is correct and unflagged.
+
+What *is* valid on H&E — nucleus count, `cells_per_mm2`,
+`mean_nucleus_area`, `nuclear_area_fraction_pct` — is reported regardless.
+On HERE101 the classical and hybrid finders agree on counts (r = 0.98) and
+nuclear density follows biology: tumour fields are less dense than normal
+ones because their nuclei are larger.
+
 Two scikit-image / DeepLIIF sample images with membranous and nuclear
 staining are in `data/public/` and are scored in `results/final/`.
 
@@ -238,6 +260,9 @@ templates.
   export ROIs. Tiling with overlap is the next feature.
 - Deconvolution assumes two stains. Double-IHC (DAB + red chromogen) needs a
   three-stain matrix — pass `stain_vectors` with three rows.
+- Melanin, hemosiderin and some red chromogens are not DAB but are not eosin
+  either; they are flagged "unrecognised", and the DAB scores on such a field
+  should be treated as invalid until you have looked at the stain overlay.
 - Scores are research-use quantification. Validate against a pathologist on
   your own material before any claim.
 
