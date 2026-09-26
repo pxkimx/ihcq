@@ -189,6 +189,37 @@ nuclei twice the radius of the rest of the set (≈16 px); at the default
 that to 58 — better, not fixed, because those large pale nuclei have
 internal texture that also splits a distance-transform watershed.
 
+### Membrane scoring against HER2 labels (BCI)
+
+**BCI** (Liu et al. 2022; non-commercial licence) has 977 test patches of
+HER2 IHC at 1024², each carrying its *slide's* pathologist score — so a
+tumour-free patch cut from a 3+ slide is labelled 3+. That makes patch-level
+agreement a lower bound; what a correct membrane score must show is a clean,
+monotonic trend across classes. Membrane compartment, 90th-percentile cell
+statistic, default cut points, no calibration:
+
+| HER2 class | n | % positive cells (median) | % cells ≥ 2+ | H-score | DAB area % |
+|---|---|---|---|---|---|
+| 0 | 38 | 2.1 | 0.0 | 2 | 2.3 |
+| 1+ | 235 | 5.9 | 0.0 | 6 | 4.6 |
+| 2+ | 446 | 14.8 | 0.0 | 16 | 11.1 |
+| 3+ | 258 | 40.7 | 7.3 | 58 | 25.0 |
+
+All 977 patches pass the stain check as DAB. Threshold-free separation by
+`% cells ≥ 2+`: 3+ vs the rest AUC 0.84, 2+ vs 3+ 0.81, HER2-negative
+(0/1+) vs positive (2+/3+) 0.74, and 0 vs 1+ only 0.59 — the low end is
+where a slide-level label says least about one patch (by the tool's own
+count, 61 % of "0" patches and 37 % of "1+" patches have under 3 % positive
+cells, i.e. little or no tumour in the field). The hybrid backend gives the
+same numbers within noise (AUC 0.83 / 0.80 / 0.73): on this material the
+nucleus finder is not the limiting factor.
+
+Two things this evaluation cannot do, and says so: it has no tumour/stroma
+distinction, so percentages are over *all* cells and stroma dilutes them
+(an ASCO/CAP score is over tumour cells); and it cannot separate label
+noise from scoring error without slide identifiers, which BCI does not
+publish.
+
 ### Handing it the wrong stain (H&E)
 
 Tested on **HERE101** (101 pathologist-annotated H&E fields, 25 tissue
