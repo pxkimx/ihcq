@@ -64,6 +64,12 @@ def analyze(rgb: np.ndarray, cfg: Config | None = None) -> Result:
     cfg = (cfg or Config()).validate()
     t0 = time.time()
     matrix = stain_matrix(cfg.stains, cfg.stain_vectors)
+    if cfg.fit_stains and not cfg.stain_vectors:
+        from .stains import estimate_stain_vectors
+        try:
+            matrix = estimate_stain_vectors(rgb)
+        except ValueError:
+            pass  # not enough stained pixels — keep the textbook vectors
     if cfg.white_point:
         white, white_src = np.asarray(cfg.white_point, dtype=np.float64), "config"
     else:
@@ -104,6 +110,7 @@ def analyze(rgb: np.ndarray, cfg: Config | None = None) -> Result:
             if cfg.mpp:
                 summary["mean_nucleus_area_um2"] = round(float(cells["area_px"].mean()) * cfg.mpp ** 2, 2)
 
+    summary["stain_vectors_used"] = [[round(float(v), 3) for v in matrix[0]], [round(float(v), 3) for v in matrix[1]]]
     summary.update({
         "thr_weak": cfg.thresholds.weak, "thr_moderate": cfg.thresholds.moderate, "thr_strong": cfg.thresholds.strong,
         "compartment": cfg.compartment, "cell_statistic": cfg.cell_statistic, "profile": cfg.profile_name,
@@ -126,10 +133,12 @@ def write_overlays(rgb: np.ndarray, res: Result, out_dir, stem: str) -> dict:
     if res.config.segment and len(res.cells):
         bins = dict(zip(res.cells["cell"].astype(int), res.cells["bin"].astype(int)))
         img = ov.cell_overlay(rgb, res.labels, bins, res.tissue, res.score_labels)
+        if res.config.mpp: img = ov.scale_bar(img, res.config.mpp)
         cap = (f"{stem}  cells={s['n_cells']}  H={s['h_score']}  +={s['pct_positive']}%  "
                f"[0 blue | 1+ yellow | 2+ orange | 3+ red]  thr={s['thr_weak']}/{s['thr_moderate']}/{s['thr_strong']}")
         p = out_dir / f"{stem}_cells.png"; ov.save(ov.with_caption(img, cap), p); paths["cells"] = p
     pm = ov.positivity_map(res.conc[..., 1], res.tissue, res.config.thresholds)
+    if res.config.mpp: pm = ov.scale_bar(pm, res.config.mpp)
     cap = f"{stem}  DAB area fraction={s['dab_area_fraction_pct']}%  pixel-H={s['pixel_h_score']}  mean OD={s['mean_dab_od_tissue']}"
     p = out_dir / f"{stem}_positivity.png"; ov.save(ov.with_caption(pm, cap), p); paths["positivity"] = p
     sp = ov.stain_panels(rgb, res.conc, res.matrix, res.white)

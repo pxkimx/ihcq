@@ -68,3 +68,24 @@ def with_caption(img: np.ndarray, text: str) -> np.ndarray:
 
 def save(img: np.ndarray, path) -> None:
     Image.fromarray(img).save(path)
+
+
+def scale_bar(img: np.ndarray, mpp: float) -> np.ndarray:
+    """Burn a scale bar into the bottom-right corner (length chosen from 10/20/50/100/200/500 µm)."""
+    h, w = img.shape[:2]
+    target_px = w * 0.18
+    for um in (10, 20, 50, 100, 200, 500, 1000):
+        if um / mpp >= target_px:
+            break
+    L = int(round(um / mpp))
+    if L > w * 0.6: L = int(w * 0.25); um = round(L * mpp)
+    im = Image.fromarray(img); d = ImageDraw.Draw(im)
+    x1, y1 = w - 14, h - 16; x0 = x1 - L
+    d.rectangle([x0 - 6, y1 - 22, x1 + 6, y1 + 8], fill=(255, 255, 255))
+    d.rectangle([x0, y1, x1, y1 + 5], fill=(20, 20, 20))
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Menlo.ttc", 12)
+    except Exception:
+        font = ImageFont.load_default()
+    d.text((x0, y1 - 18), f"{um} µm", fill=(20, 20, 20), font=font)
+    return np.array(im)

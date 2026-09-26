@@ -74,6 +74,7 @@
         <label>Per-cell statistic</label>
         <select id="statistic"><option value="mean">Mean DAB OD</option><option value="median">Median</option><option value="p90">90th percentile (membrane / punctate)</option></select>
         <label class="check"><input id="segment" type="checkbox" checked> Find nuclei (uncheck for pixel metrics only)</label>
+        <label class="check"><input id="fit_stains" type="checkbox"> Fit stain vectors to each image (Macenko) — use when brown leaks into the hematoxylin panel</label>
       </details>
       <button class="btn primary" id="reanalyze" style="width:100%;margin-top:12px;justify-content:center" disabled>Re-analyze current image with these settings</button>
       <details class="adv" open>
@@ -123,6 +124,7 @@
       </div>
 
       <div class="tiles" id="tiles"></div>
+      <div class="kvs" id="kvs"></div>
       <div class="qc" id="qc"></div>
 
       <div class="grid2">
@@ -132,8 +134,16 @@
               <button data-layer="original">Original</button>
               <button data-layer="cells" aria-pressed="true">Cells by bin</button>
               <button data-layer="positivity">Positivity</button>
+              <button data-layer="heat">Density heat</button>
             </div>
-            <label class="inline">Overlay <input id="opacity" type="range" min="0" max="100" value="100"></label>
+            <input id="opacity" type="range" min="0" max="100" value="100" title="overlay opacity">
+            <div class="seg" id="roi-tools">
+              <button data-tool="include" title="Click points, double-click to close">＋ ROI</button>
+              <button data-tool="exclude" title="Region to leave out">－ Exclude</button>
+              <button data-tool="clear">Clear</button>
+            </div>
+            <button class="btn primary sm" id="roi-apply" disabled>Score inside ROI</button>
+            <label class="check inline tight"><input id="show-hot" type="checkbox" checked>hotspot</label>
             <button class="btn sm ghost" id="fit">Fit</button>
             <span class="mut" id="zoom-label">100%</span>
           </div>
@@ -143,11 +153,11 @@
           </div>
           <div class="legend">
             <span><i class="b0"></i>0</span><span><i class="b1"></i>1+</span><span><i class="b2"></i>2+</span><span><i class="b3"></i>3+</span>
-            <span class="mut">scroll to zoom · drag to pan · hover a nucleus</span>
+            <span class="mut">scroll to zoom · drag to pan · hover a nucleus · ROI: click points, double-click to close</span>
           </div>
         </div>
 
-        <div class="card">
+        <div class="card side-col">
           <h3>DAB intensity per cell <span class="mut">drag the cut points</span></h3>
           <canvas id="hist" height="190"></canvas>
           <div class="live" id="live"></div>
@@ -157,6 +167,18 @@
             <button class="btn sm ghost" id="reset-th">Reset</button>
           </div>
           <p class="mut" id="truth"></p>
+          <div class="cells-card">
+            <div class="card-head" style="margin:10px 0 6px">
+              <h3 style="margin:0">Cells <span class="mut" id="cell-count"></span></h3>
+              <div class="seg sm" id="cell-filter">
+                <button data-f="all" aria-pressed="true">All</button><button data-f="0">0</button><button data-f="1">1+</button><button data-f="2">2+</button><button data-f="3">3+</button>
+              </div>
+            </div>
+            <div class="celltable tw"><table id="ctab"><thead><tr>
+              <th data-c="i" class="n">#</th><th data-c="bin">bin</th><th data-c="dab" class="n">DAB OD</th><th data-c="hema" class="n">hema OD</th><th data-c="area" class="n">area px</th><th data-c="x" class="n">x</th><th data-c="y" class="n">y</th>
+            </tr></thead><tbody></tbody></table></div>
+            <p class="mut" style="margin:6px 0 0">Click a row to fly the viewer to that nucleus.</p>
+          </div>
         </div>
       </div>
 

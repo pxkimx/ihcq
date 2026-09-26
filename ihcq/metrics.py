@@ -39,8 +39,13 @@ def per_cell_table(labels: np.ndarray, score_labels: np.ndarray, dab: np.ndarray
         dab_stat = np.array([np.percentile(dab[score_labels == i], 90) if (score_labels == i).any() else 0.0 for i in idx])
     dab_stat = np.nan_to_num(np.asarray(dab_stat, dtype=np.float64))
     bins = bin_intensity(dab_stat, th)
+    from skimage.measure import regionprops
+    props = {r.label: r for r in regionprops(labels)}
+    ecc = np.array([props[i].eccentricity if i in props else 0.0 for i in idx])
+    sol = np.array([props[i].solidity if i in props else 0.0 for i in idx])
     df = pd.DataFrame({
         "cell": idx, "y": np.round(cy, 1), "x": np.round(cx, 1), "area_px": area.astype(int),
+        "eccentricity": np.round(ecc, 3), "solidity": np.round(sol, 3),
         "dab_od": np.round(dab_stat, 4), "hema_od": np.round(hema_mean, 4),
         "bin": bins, "bin_name": [BIN_NAMES[int(b)] for b in bins],
     })
@@ -81,6 +86,61 @@ def allred(bins: np.ndarray) -> dict:
     return {"allred_ps": ps, "allred_is": is_, "allred_total": ps + is_}
 
 
+def irs(bins: np.ndarray) -> dict:
+    """Immunoreactive score (Remmele & Stegner): proportion score (0: ≤5 %,
+    1: 6–25 %, 2: 26–50 %, 3: >50 % positive) × intensity score (0–3, the
+    rounded mean bin of positive cells) = 0–12."""
+    bins = np.asarray(bins)
+    if bins.size == 0:
+        return {"irs_ps": None, "irs_is": None, "irs": None}
+    pos = bins > 0
+    f = pos.mean() * 100
+    ps = 0 if f <= 5 else 1 if f <= 25 else 2 if f <= 50 else 3
+    is_ = int(np.round(bins[pos].mean())) if pos.any() else 0
+    return {"irs_ps": ps, "irs_is": is_, "irs": ps * is_}
+
+
+def profiler_score(px_bins: np.ndarray) -> dict:
+    """Four-tier pixel score in the spirit of IHC Profiler (Varghese 2014):
+    the percentage of tissue pixels in each intensity zone and the zone that
+    dominates the stained pixels.  Zones follow this tool's OD cut points
+    rather than IHC Profiler's fixed 8-bit intensity bands."""
+    px_bins = np.asarray(px_bins)
+    if px_bins.size == 0:
+        return {"profiler_zone": None, "profiler_pct": None}
+    pct = [(px_bins == k).mean() * 100 for k in range(4)]
+    names = ["negative", "low positive", "positive", "high positive"]
+    # IHC Profiler's rule: score = zone holding the largest share of stained pixels,
+    # unless the field is essentially unstained
+    stained = pct[1] + pct[2] + pct[3]
+    zone = "negative" if stained < 5 else names[1 + int(np.argmax(pct[1:]))]
+    return {"profiler_zone": zone, "profiler_pct": [round(v, 2) for v in pct]}
+
+
+def hotspot(df: pd.DataFrame, window_cells: int = 500) -> dict:
+    """Ki-67-style hotspot: among all neighbourhoods of `window_cells` nearest
+    cells, the one with the highest positive fraction (IKWG counts ≥500
+    tumour cells in the hottest field).  Also returns the coldest, so the
+    heterogeneity across the field is visible next to the global index."""
+    n = len(df)
+    if n < 50:
+        return {"hotspot_pct_positive": None, "hotspot_xy": None, "coldspot_pct_positive": None, "hotspot_window": None}
+    from scipy.spatial import cKDTree
+    # A window that holds every cell is not a hotspot, it is the global index.
+    # Use at most a quarter of the field so hot and cold regions can differ.
+    k = int(min(window_cells, max(30, n // 4)))
+    pts = df[["x", "y"]].to_numpy()
+    pos = (df["bin"].to_numpy() > 0).astype(float)
+    tree = cKDTree(pts)
+    # evaluate windows centred on a subsample of cells (all if small)
+    idx = np.arange(n) if n <= 2000 else np.random.default_rng(0).choice(n, 2000, replace=False)
+    _, nb = tree.query(pts[idx], k=k)
+    frac = pos[nb].mean(axis=1)
+    hi, lo = int(np.argmax(frac)), int(np.argmin(frac))
+    return {"hotspot_pct_positive": round(float(frac[hi] * 100), 2), "hotspot_xy": [round(float(pts[idx[hi]][0]), 1), round(float(pts[idx[hi]][1]), 1)],
+            "coldspot_pct_positive": round(float(frac[lo] * 100), 2), "hotspot_window": int(k)}
+
+
 def cell_summary(df: pd.DataFrame, tissue_area_px: int, mpp: float | None = None) -> dict:
     """Aggregate the per-cell table into report-level numbers."""
     n = len(df)
@@ -96,6 +156,8 @@ def cell_summary(df: pd.DataFrame, tissue_area_px: int, mpp: float | None = None
         out[f"pct_{k}plus"] = round(float((b == k).mean() * 100), 2)
     out["h_score"] = h_score(b)
     out.update(allred(b))
+    out.update(irs(b))
+    out.update(hotspot(df))
     out["mean_cell_dab_od"] = round(float(df["dab_od"].mean()), 4)
     out["cells_per_tissue_px1e4"] = round(n / max(tissue_area_px, 1) * 1e4, 3)
     if mpp:
@@ -133,6 +195,7 @@ def pixel_summary(dab: np.ndarray, hema: np.ndarray, tissue: np.ndarray, th: Thr
         out[f"pct_px_{k}plus"] = round(float((bins == k).mean() * 100), 3)
     # a pixel-level H-score analogue: same arithmetic, over tissue pixels
     out["pixel_h_score"] = h_score(bins)
+    out.update(profiler_score(bins))
     if mpp:
         out["tissue_area_mm2"] = round(n_tissue * (mpp / 1000.0) ** 2, 4)
         out["dab_area_mm2"] = round(int(pos.sum()) * (mpp / 1000.0) ** 2, 4)

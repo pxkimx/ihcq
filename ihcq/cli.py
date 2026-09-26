@@ -31,6 +31,8 @@ def _cfg_from_args(a) -> Config:
         cfg.nucleus_radius_px = int(a.radius)
     if getattr(a, "stardist_prob", None):
         cfg.stardist_prob = a.stardist_prob
+    if getattr(a, "fit_stains", False):
+        cfg.fit_stains = True
     if getattr(a, "no_segment", False):
         cfg.segment = False
     if getattr(a, "thresholds", None):
@@ -158,6 +160,7 @@ def main(argv=None):
     s.add_argument("--white", nargs=3, type=float, metavar=("R", "G", "B"), help="white point measured on bare glass of this slide")
     s.add_argument("--radius", type=int, help="typical nuclear radius in px (default 8)")
     s.add_argument("--no-segment", action="store_true", help="pixel metrics only")
+    s.add_argument("--fit-stains", dest="fit_stains", action="store_true", help="fit stain vectors to each image (Macenko) instead of textbook values")
     s.add_argument("--max-side", type=int, help="for pyramidal TIFFs: read the level near this size")
     s.set_defaults(func=cmd_score)
 

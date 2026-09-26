@@ -5,7 +5,7 @@ const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [..
 const BIN = ["--b0", "--b1", "--b2", "--b3"], BINNAME = ["0", "1+", "2+", "3+"];
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : (typeof v === "number" ? v.toFixed(d) : String(v));
-const state = { results: {}, order: [], cur: null, th: { weak: .15, moderate: .40, strong: .80 }, layer: "cells", zoom: 1, pan: { x: 0, y: 0 }, imgs: {}, hover: null, sort: { k: "image", dir: 1 } };
+const state = { csort: { c: "dab", dir: -1 }, cfilter: "all", rois: {}, tool: null, drawing: null, heat: null, results: {}, order: [], cur: null, th: { weak: .15, moderate: .40, strong: .80 }, layer: "cells", zoom: 1, pan: { x: 0, y: 0 }, imgs: {}, hover: null, sort: { k: "image", dir: 1 } };
 
 /* ---------- theme ---------- */
 try { const t = localStorage.getItem("ihcq-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -28,7 +28,7 @@ const PRESETS = {
   pixels: { compartment: "nuclear", statistic: "mean", weak: .15, moderate: .40, strong: .80, segment: false, ring: 3 },
 };
 $("#preset").onchange = e => { const p = PRESETS[e.target.value]; for (const k of ["compartment", "statistic"]) $("#" + k).value = p[k]; for (const k of ["weak", "moderate", "strong", "ring"]) $("#" + k).value = p[k]; $("#segment").checked = p.segment; syncTh(); };
-function settingsQuery(name) { const p = new URLSearchParams(); for (const k of ["compartment", "backend", "statistic", "mpp", "radius", "ring", "weak", "moderate", "strong"]) { const v = $("#" + k).value; if (v !== "") p.set(k, v); } if (!$("#segment").checked) p.set("segment", "0"); if (name) p.set("name", name); return p.toString(); }
+function settingsQuery(name) { const p = new URLSearchParams(); for (const k of ["compartment", "backend", "statistic", "mpp", "radius", "ring", "weak", "moderate", "strong"]) { const v = $("#" + k).value; if (v !== "") p.set(k, v); } if (!$("#segment").checked) p.set("segment", "0"); if ($("#fit_stains").checked) p.set("fit_stains", "1"); if (name) p.set("name", name); return p.toString(); }
 function syncTh() { state.th = { weak: +$("#weak").value, moderate: +$("#moderate").value, strong: +$("#strong").value }; if (state.cur) { drawHist(); live(); } }
 ["weak", "moderate", "strong"].forEach(k => $("#" + k).oninput = syncTh);
 $("#save-profile").onclick = () => { const cfg = { compartment: $("#compartment").value, cell_statistic: $("#statistic").value, backend: $("#backend").value, ring_px: +$("#ring").value || 3, mpp: $("#mpp").value ? +$("#mpp").value : null, nucleus_radius_px: $("#radius").value ? +$("#radius").value : null, segment: $("#segment").checked, thresholds: { weak: +$("#weak").value, moderate: +$("#moderate").value, strong: +$("#strong").value }, profile_name: "app-profile" }; const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(cfg, null, 2)], { type: "application/json" })); a.download = "ihcq_profile.json"; a.click(); toast("Profile saved — usable with  ihcq score --profile"); };
@@ -62,7 +62,7 @@ $("#quit").onclick = async () => { await fetch("/api/quit", { method: "POST" });
 $("#reanalyze").onclick = async () => { const j = state.results[state.cur]; if (!j) return; const b = $("#reanalyze"); b.disabled = true; b.textContent = "Re-analyzing…";
   try { const r = await fetch(`/api/reanalyze?id=${j.id}&` + settingsQuery(), { method: "POST" }); const nj = await r.json(); if (!r.ok) throw new Error(nj.error); nj.truth = j.truth; nj.note = j.note; add(nj); await show(nj.id); toast("Re-analyzed with the current settings"); }
   catch (err) { toast(err.message, true); } finally { b.textContent = "Re-analyze current image with these settings"; b.disabled = !state.cur; } };
-["compartment", "backend", "statistic", "mpp", "radius", "ring", "segment"].forEach(k => $("#" + k).addEventListener("change", () => { if (state.cur) { const b = $("#reanalyze"); b.classList.add("primary"); b.textContent = "Re-analyze current image with these settings ↻"; } }));
+["compartment", "backend", "statistic", "mpp", "radius", "ring", "segment", "fit_stains"].forEach(k => $("#" + k).addEventListener("change", () => { if (state.cur) { const b = $("#reanalyze"); b.classList.add("primary"); b.textContent = "Re-analyze current image with these settings ↻"; } }));
 async function setGroup(id, g) { const j = state.results[id]; if (!j) return; j.summary.group = g; await fetch("/api/group", { method: "POST", body: JSON.stringify({ id, group: g }) }); }
 $("#group").addEventListener("change", e => { if (state.cur) { setGroup(state.cur, e.target.value.trim()); toast(e.target.value.trim() ? `Grouped as “${e.target.value.trim()}”` : "Group cleared"); } });
 const dlm = $("#dl-menu"); $("#dl-btn").onclick = e => { e.stopPropagation(); dlm.hidden = !dlm.hidden; }; document.addEventListener("click", () => dlm.hidden = true);
@@ -76,6 +76,7 @@ async function show(id) {
   $("#r-name").textContent = `${s.image} · ${s.width}×${s.height} · ${s.compartment} · ${s.seconds}s`;
   const st = $("#r-stain"); const kind = s.second_stain; st.className = "stain " + (kind === "dab" ? "" : kind === "eosin" ? "bad" : "unk");
   st.innerHTML = `<i></i>${kind === "dab" ? "Second stain is <b>DAB</b> — chromogenic IHC" : kind === "eosin" ? "Second stain is <b>eosin</b> — this is H&amp;E; DAB scores are not valid" : "Second stain <b>unrecognised</b> — check the stain separation"} <span class="mut">${s.second_stain_angle_to_dab}° from DAB · ${s.second_stain_angle_to_eosin}° from eosin</span>`;
+  if (s.roi_polygons) state.rois[id] = { include: s.roi_polygons.include || [], exclude: s.roi_polygons.exclude || [] };
   state.th = { ...j.thresholds }; $("#weak").value = state.th.weak; $("#moderate").value = state.th.moderate; $("#strong").value = state.th.strong;
   renderTiles(s); renderQC(j.qc);
   $("#st-orig").src = j.original; $("#st-hema").src = j.overlays.hematoxylin; $("#st-dab").src = j.overlays.dab;
@@ -90,19 +91,29 @@ async function show(id) {
   $("#dl-cells-img").href = j.overlays.cells || "#"; $("#dl-cells-img").download = s.image + "_labelled_nuclei.png";
   $("#dl-pos").href = j.overlays.positivity; $("#dl-pos").download = s.image + "_positivity.png";
   $("#dl-stains").href = j.overlays.stains; $("#dl-stains").download = s.image + "_stain_separation.png";
-  await loadImages(j); state.zoom = 1; state.pan = { x: 0, y: 0 }; fitView(); drawViewer(); drawHist(); live();
+  await loadImages(j); state.zoom = 1; state.pan = { x: 0, y: 0 }; fitView(); drawViewer(); drawHist(); live(); renderCells();
 }
 function tile(v, label, sub, color) { return `<div class="tile" style="--tc:${color}"><b>${v}</b><small>${label}</small>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`; }
 function renderTiles(s) {
   const seg = s.n_cells !== undefined && s.n_cells !== null;
+  const hcol = `var(${BIN[Math.min(3, Math.floor((s.h_score || 0) / 100) + 1)]})`;
   $("#tiles").innerHTML =
-    (seg ? tile(fmt(s.h_score, 0), "H-score", "0 – 300", `var(${BIN[Math.min(3, Math.floor((s.h_score || 0) / 100) + 1)]})`) : "") +
+    (seg ? tile(fmt(s.h_score, 0), "H-score", "0 – 300", hcol) : "") +
     (seg ? tile(fmt(s.pct_positive) + "%", "positive cells", `${s.n_cells} nuclei`, "var(--b2)") : "") +
-    (seg ? tile(fmt(s.allred_total, 0), "Allred", `PS ${fmt(s.allred_ps, 0)} + IS ${fmt(s.allred_is, 0)}`, "var(--b3)") : "") +
-    tile(fmt(s.dab_area_fraction_pct) + "%", "DAB area", "of tissue footprint", "var(--dab)") +
+    (seg ? tile(fmt(s.pct_3plus) + "%", "3+ cells", `2+ ${fmt(s.pct_2plus)}% · 1+ ${fmt(s.pct_1plus)}%`, "var(--b3)") : "") +
+    (seg ? tile(fmt(s.allred_total, 0), "Allred", `PS ${fmt(s.allred_ps, 0)} + IS ${fmt(s.allred_is, 0)}`, "var(--b1)") : "") +
+    (seg ? tile(fmt(s.irs, 0), "IRS", `PS ${fmt(s.irs_ps, 0)} × IS ${fmt(s.irs_is, 0)} · 0–12`, "var(--acc)") : "") +
+    (seg && s.hotspot_pct_positive != null ? tile(fmt(s.hotspot_pct_positive) + "%", "hotspot", `${s.hotspot_window}-cell window · cold ${fmt(s.coldspot_pct_positive)}%`, "var(--b3)") : "") +
+    tile(fmt(s.dab_area_fraction_pct) + "%", "DAB area", `profiler: ${s.profiler_zone || "—"}`, "var(--dab)") +
     tile(fmt(s.mean_dab_od_tissue, 3), "mean DAB OD", `p95 ${fmt(s.p95_dab_od_tissue, 2)}`, "var(--acc)") +
-    (seg ? tile(fmt(s.cells_per_mm2 ?? s.cells_per_tissue_px1e4, s.cells_per_mm2 ? 0 : 2), s.cells_per_mm2 ? "nuclei / mm²" : "nuclei / 10⁴ px", `median r ${fmt(s.median_nucleus_radius_px)} px`, "var(--b0)") : "") +
-    tile(fmt(s.tissue_fraction * 100, 0) + "%", "tissue in field", `white ${s.white_point_source}`, "var(--ok)");
+    (seg ? tile(fmt(s.cells_per_mm2 ?? s.cells_per_tissue_px1e4, s.cells_per_mm2 ? 0 : 2), s.cells_per_mm2 ? "nuclei / mm²" : "nuclei / 10⁴ px", `median r ${fmt(s.median_nucleus_radius_px)} px`, "var(--b0)") : "");
+  const kv = [];
+  kv.push(`tissue <b>${fmt(s.tissue_fraction * 100, 0)}%</b> of field`); kv.push(`white point <b>${s.white_point_source}</b> ${(s.white_point || []).map(v => Math.round(v)).join("/")}`);
+  if (seg) { kv.push(`mean nucleus area <b>${fmt(s.mean_nucleus_area_px, 0)} px</b>`); kv.push(`nuclear area <b>${fmt(s.nuclear_area_fraction_pct)}%</b> of tissue`); kv.push(`nucleus radius <b>${fmt(s.median_nucleus_radius_px)} px</b> (assumed ${s.assumed_nucleus_radius_px})`); kv.push(`DAB inside nuclei <b>${fmt((s.dab_in_nuclei_fraction || 0) * 100, 0)}%</b>`); }
+  kv.push(`pixel H <b>${fmt(s.pixel_h_score, 0)}</b>`); kv.push(`integrated DAB OD <b>${fmt(s.integrated_dab_od, 0)}</b>`);
+  if (s.stain_vectors_used) kv.push(`DAB vector <b>${s.stain_vectors_used[1].map(v => v.toFixed(2)).join(" ")}</b>`);
+  if (s.roi_fraction != null) kv.push(`ROI <b>${fmt(s.roi_fraction * 100, 0)}%</b> of tissue`);
+  $("#kvs").innerHTML = kv.map(x => `<span>${x}</span>`).join("");
 }
 function renderQC(flags) { $("#qc").innerHTML = (flags || []).map(f => `<div class="${/NOT meaningful|not valid/i.test(f) ? "bad" : ""}">${f}</div>`).join(""); }
 
@@ -120,15 +131,44 @@ function drawViewer() {
   ctx.imageSmoothingEnabled = sc < 2;
   ctx.setTransform(sc, 0, 0, sc, state.pan.x, state.pan.y);
   ctx.drawImage(im, 0, 0);
-  if (state.layer !== "original") { ctx.globalAlpha = $("#opacity").value / 100; const ov = state.imgs[state.layer]; ctx.drawImage(ov, 0, state.imgs.cap, im.width, im.height, 0, 0, im.width, im.height); ctx.globalAlpha = 1; }
+  if (state.layer === "heat") { ctx.globalAlpha = $("#opacity").value / 100; ctx.drawImage(heatCanvas(), 0, 0, im.width, im.height); ctx.globalAlpha = 1; }
+  else if (state.layer !== "original") { ctx.globalAlpha = $("#opacity").value / 100; const ov = state.imgs[state.layer]; ctx.drawImage(ov, 0, state.imgs.cap, im.width, im.height, 0, 0, im.width, im.height); ctx.globalAlpha = 1; }
+  // ROI polygons
+  const R = state.rois[state.cur] || { include: [], exclude: [] };
+  const poly = (pts, col, dash, close) => { if (pts.length < 1) return; ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); if (close) ctx.closePath(); ctx.lineWidth = 2.5 / sc; ctx.strokeStyle = col; ctx.setLineDash(dash ? [8 / sc, 5 / sc] : []); ctx.stroke(); ctx.setLineDash([]); if (close) { ctx.fillStyle = col; ctx.globalAlpha = .10; ctx.fill(); ctx.globalAlpha = 1; } pts.forEach(p => { ctx.beginPath(); ctx.arc(p[0], p[1], 3.5 / sc, 0, 7); ctx.fillStyle = col; ctx.fill(); }); };
+  R.include.forEach(p => poly(p, "#3dd68c", false, true)); R.exclude.forEach(p => poly(p, "#ff5c72", true, true));
+  if (state.drawing) poly(state.drawing.pts, state.drawing.tool === "include" ? "#3dd68c" : "#ff5c72", true, false);
+  const j = state.results[state.cur];
+  if ($("#show-hot").checked && j && j.summary.hotspot_xy) { const [hx, hy] = j.summary.hotspot_xy; const rr = Math.sqrt((j.summary.hotspot_window || 500) / Math.max(1, j.cells.length)) * Math.sqrt(im.width * im.height) * 0.56; ctx.beginPath(); ctx.arc(hx, hy, rr, 0, 7); ctx.lineWidth = 3 / sc; ctx.strokeStyle = "#ff4d5e"; ctx.setLineDash([6 / sc, 4 / sc]); ctx.stroke(); ctx.setLineDash([]); ctx.font = `bold ${13 / sc}px ${css("--mono")}`; ctx.fillStyle = "#ff4d5e"; ctx.fillText(`hotspot ${fmt(j.summary.hotspot_pct_positive)}%`, hx - rr, hy - rr - 6 / sc); }
   if (state.hover) { const [x, y, a] = state.hover; const r = Math.sqrt(a / Math.PI) + 3; ctx.lineWidth = 2 / sc; ctx.strokeStyle = "#fff"; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke(); }
   $("#zoom-label").textContent = Math.round(state.zoom * 100) + "%";
 }
+function heatCanvas() {
+  const j = state.results[state.cur]; const im = state.imgs.original;
+  if (state.heat && state.heat.id === j.id && state.heat.th === JSON.stringify(state.th)) return state.heat.c;
+  const f = 4, w = Math.ceil(im.width / f), h = Math.ceil(im.height / f); const acc = new Float32Array(w * h), tot = new Float32Array(w * h);
+  const r = Math.max(6, Math.round(Math.sqrt(im.width * im.height / Math.max(1, j.cells.length)) * 2.2 / f)); const r2 = r * r;
+  for (const c of j.cells) { const cx = c[0] / f, cy = c[1] / f, pos = binOf(c[3]) > 0 ? 1 : 0;
+    for (let y = Math.max(0, cy - r | 0); y <= Math.min(h - 1, cy + r | 0); y++) for (let x = Math.max(0, cx - r | 0); x <= Math.min(w - 1, cx + r | 0); x++) { const d2 = (x - cx) ** 2 + (y - cy) ** 2; if (d2 > r2) continue; const wgt = 1 - d2 / r2; acc[y * w + x] += wgt * pos; tot[y * w + x] += wgt; } }
+  const c = document.createElement("canvas"); c.width = w; c.height = h; const g = c.getContext("2d"); const id = g.createImageData(w, h); const d = id.data;
+  for (let i = 0; i < w * h; i++) { if (tot[i] < 0.6) continue; const v = acc[i] / tot[i]; const t = Math.min(1, v); const rr = t < .5 ? 79 + (246 - 79) * t * 2 : 246 + (255 - 246) * (t - .5) * 2, gg = t < .5 ? 131 + (201 - 131) * t * 2 : 201 - (201 - 77) * (t - .5) * 2, bb = t < .5 ? 255 - (255 - 69) * t * 2 : 69 - (69 - 94) * (t - .5) * 2; d[i * 4] = rr; d[i * 4 + 1] = gg; d[i * 4 + 2] = bb; d[i * 4 + 3] = 150 + 90 * Math.min(1, tot[i] / 3); }
+  g.putImageData(id, 0, 0); state.heat = { id: j.id, th: JSON.stringify(state.th), c }; return c;
+}
+/* ROI tools */
+$$("#roi-tools button").forEach(b => b.onclick = () => { const t = b.dataset.tool; if (t === "clear") { state.rois[state.cur] = { include: [], exclude: [] }; state.drawing = null; state.tool = null; $$("#roi-tools button").forEach(x => x.setAttribute("aria-pressed", "false")); $("#roi-apply").disabled = false; $("#roi-apply").textContent = "Score full field"; drawViewer(); return; } state.tool = state.tool === t ? null : t; state.drawing = null; $$("#roi-tools button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.tool === state.tool))); viewer.style.cursor = state.tool ? "crosshair" : "grab"; });
+function imgPoint(e) { const r = cv.getBoundingClientRect(); const sc = state.base * state.zoom; return [((e.clientX - r.left) * devicePixelRatio - state.pan.x) / sc, ((e.clientY - r.top) * devicePixelRatio - state.pan.y) / sc]; }
+viewer.addEventListener("click", e => { if (!state.tool || !state.cur) return; const p = imgPoint(e); if (!state.drawing) state.drawing = { tool: state.tool, pts: [] }; state.drawing.pts.push([Math.round(p[0]), Math.round(p[1])]); drawViewer(); });
+viewer.addEventListener("dblclick", e => { if (!state.drawing) return; e.preventDefault(); const d = state.drawing; state.drawing = null; if (d.pts.length >= 3) { const R = state.rois[state.cur] = state.rois[state.cur] || { include: [], exclude: [] }; R[d.tool].push(d.pts.slice(0, -1)); $("#roi-apply").disabled = false; $("#roi-apply").textContent = "Score inside ROI"; toast(`${d.tool === "include" ? "ROI" : "Exclusion"} closed — ${d.pts.length - 1} points`); } drawViewer(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && state.drawing) { state.drawing = null; drawViewer(); } });
+$("#roi-apply").onclick = async () => { const j = state.results[state.cur]; if (!j) return; const R = state.rois[state.cur] || { include: [], exclude: [] }; const b = $("#roi-apply"); b.disabled = true; b.textContent = "Scoring…";
+  try { const r = await fetch(`/api/roi?id=${j.id}`, { method: "POST", body: JSON.stringify(R) }); const nj = await r.json(); if (!r.ok) throw new Error(nj.error); nj.truth = j.truth; nj.note = j.note; add(nj); await show(nj.id); toast(R.include.length || R.exclude.length ? `Scored inside ROI (${fmt((nj.summary.roi_fraction || 0) * 100, 0)}% of tissue)` : "Scored the full field"); }
+  catch (err) { toast(err.message, true); } finally { b.textContent = "Score inside ROI"; } };
+$("#show-hot").onchange = drawViewer;
 $$("#layers button").forEach(b => b.onclick = () => setLayer(b.dataset.layer));
 function setLayer(l) { state.layer = l; $$("#layers button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.layer === l))); drawViewer(); }
 $("#opacity").oninput = drawViewer; $("#fit").onclick = () => { fitView(); drawViewer(); };
 viewer.addEventListener("wheel", e => { e.preventDefault(); const r = cv.getBoundingClientRect(); const mx = (e.clientX - r.left) * devicePixelRatio, my = (e.clientY - r.top) * devicePixelRatio; const f = Math.exp(-e.deltaY * 0.0015); const nz = Math.min(12, Math.max(1, state.zoom * f)); const k = nz / state.zoom; state.pan.x = mx - (mx - state.pan.x) * k; state.pan.y = my - (my - state.pan.y) * k; state.zoom = nz; if (nz === 1) fitView(); drawViewer(); }, { passive: false });
-let drag = null; viewer.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, px: state.pan.x, py: state.pan.y }; viewer.setPointerCapture(e.pointerId); });
+let drag = null; viewer.addEventListener("pointerdown", e => { if (state.tool) return; drag = { x: e.clientX, y: e.clientY, px: state.pan.x, py: state.pan.y }; viewer.setPointerCapture(e.pointerId); });
 viewer.addEventListener("pointerup", () => drag = null);
 viewer.addEventListener("pointermove", e => {
   if (drag) { state.pan.x = drag.px + (e.clientX - drag.x) * devicePixelRatio; state.pan.y = drag.py + (e.clientY - drag.y) * devicePixelRatio; drawViewer(); return; }
@@ -141,6 +181,24 @@ viewer.addEventListener("pointermove", e => {
 });
 viewer.addEventListener("pointerleave", () => { state.hover = null; tip.hidden = true; drawViewer(); });
 new ResizeObserver(() => { if (state.cur) { fitView(); drawViewer(); } }).observe(viewer);
+
+/* ---------- per-cell table linked to the viewer ---------- */
+function renderCells() {
+  const j = state.results[state.cur]; const tb = $("#ctab tbody"); if (!j) return;
+  let rows = j.cells.map((c, i) => ({ i: i + 1, x: c[0], y: c[1], area: c[2], dab: c[3], hema: c[4], bin: binOf(c[3]), ref: c }));
+  const nAll = rows.length;
+  if (state.cfilter !== "all") rows = rows.filter(r => r.bin === +state.cfilter);
+  const { c, dir } = state.csort; rows.sort((a, b) => (a[c] > b[c] ? 1 : a[c] < b[c] ? -1 : 0) * dir);
+  const LIMIT = 600; const shown = rows.slice(0, LIMIT);
+  $("#cell-count").textContent = `${rows.length}${rows.length !== nAll ? " of " + nAll : ""}${rows.length > LIMIT ? " · first " + LIMIT + " shown" : ""}`;
+  tb.innerHTML = shown.map(r => `<tr data-x="${r.x}" data-y="${r.y}"><td class="n">${r.i}</td><td><span class="bdot" style="background:var(${BIN[r.bin]})"></span>${BINNAME[r.bin]}</td><td class="n">${r.dab.toFixed(3)}</td><td class="n">${r.hema.toFixed(3)}</td><td class="n">${r.area}</td><td class="n">${r.x.toFixed(0)}</td><td class="n">${r.y.toFixed(0)}</td></tr>`).join("");
+  $$("#ctab th").forEach(th => th.classList.toggle("sorted", th.dataset.c === c));
+}
+$$("#ctab th").forEach(th => th.onclick = () => { const c = th.dataset.c; state.csort = { c, dir: state.csort.c === c ? -state.csort.dir : (c === "i" || c === "x" || c === "y" ? 1 : -1) }; renderCells(); });
+$$("#cell-filter button").forEach(b => b.onclick = () => { state.cfilter = b.dataset.f; $$("#cell-filter button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); renderCells(); });
+$("#ctab tbody").addEventListener("click", e => { const tr = e.target.closest("tr"); if (!tr) return; const x = +tr.dataset.x, y = +tr.dataset.y; const j = state.results[state.cur];
+  state.zoom = Math.max(state.zoom, 4); const sc = state.base * state.zoom; state.pan.x = cv.width / 2 - x * sc; state.pan.y = cv.height / 2 - y * sc;
+  state.hover = j.cells.find(c => c[0] === x && c[1] === y) || null; $$("#ctab tr.hl").forEach(r => r.classList.remove("hl")); tr.classList.add("hl"); drawViewer(); });
 
 /* ---------- histogram with draggable cut points ---------- */
 const hist = $("#hist"), hctx = hist.getContext("2d");
@@ -166,9 +224,10 @@ function drawHist() {
 let hdrag = null;
 hist.addEventListener("pointerdown", e => { const px = e.offsetX; let best = null, bd = 14; for (const k of ["weak", "moderate", "strong"]) { const d = Math.abs(state.histX(state.th[k]) - px); if (d < bd) { bd = d; best = k; } } if (best) { hdrag = best; hist.setPointerCapture(e.pointerId); } });
 hist.addEventListener("pointermove", e => { if (!hdrag) return; let v = Math.max(0.01, state.histInv(e.offsetX)); const t = state.th; if (hdrag === "weak") v = Math.min(v, t.moderate - .01); if (hdrag === "moderate") v = Math.max(t.weak + .01, Math.min(v, t.strong - .01)); if (hdrag === "strong") v = Math.max(t.moderate + .01, v); t[hdrag] = +v.toFixed(3); $("#" + hdrag).value = t[hdrag]; drawHist(); live(); });
-hist.addEventListener("pointerup", () => hdrag = null);
+hist.addEventListener("pointerup", () => { if (hdrag) renderCells(); hdrag = null; });
 function allred(bins) { const n = bins.length; if (!n) return null; const pos = bins.filter(b => b > 0); const f = pos.length / n; const ps = f === 0 ? 0 : f <= .01 ? 1 : f <= .1 ? 2 : f <= 1 / 3 ? 3 : f <= 2 / 3 ? 4 : 5; const is = pos.length ? Math.round(pos.reduce((a, b) => a + b, 0) / pos.length) : 0; return ps + is; }
 function live() {
+  if (state.layer === "heat") drawViewer();
   const j = state.results[state.cur]; if (!j || !j.cells.length) { $("#live").innerHTML = ""; $("#binbar").innerHTML = ""; return; }
   const bins = j.cells.map(c => binOf(c[3])); const n = bins.length; const p = [0, 1, 2, 3].map(k => bins.filter(b => b === k).length / n * 100);
   const H = p[1] + 2 * p[2] + 3 * p[3];

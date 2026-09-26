@@ -23,3 +23,18 @@ def test_allred():
     assert (r["allred_ps"], r["allred_is"], r["allred_total"]) == (5, 3, 8)
     r = allred(np.array([1] * 5 + [0] * 95))        # 5% weak → PS 2, IS 1
     assert (r["allred_ps"], r["allred_is"], r["allred_total"]) == (2, 1, 3)
+
+
+def test_irs_and_profiler_and_hotspot():
+    from ihcq.metrics import irs, profiler_score, hotspot
+    import pandas as pd
+    assert irs(np.zeros(20))["irs"] == 0
+    r = irs(np.array([3] * 60 + [0] * 40))             # 60 % positive → PS 3, all strong → IS 3 → 9
+    assert (r["irs_ps"], r["irs_is"], r["irs"]) == (3, 3, 9)
+    assert profiler_score(np.zeros(100))["profiler_zone"] == "negative"
+    assert profiler_score(np.array([0] * 50 + [2] * 40 + [3] * 10))["profiler_zone"] == "positive"
+    rng = np.random.default_rng(0); n = 800
+    x = rng.uniform(0, 1000, n); y = rng.uniform(0, 1000, n)
+    b = ((x < 300) & (y < 300)).astype(int) * 3     # a positive corner
+    h = hotspot(pd.DataFrame({"x": x, "y": y, "bin": b}), window_cells=40)
+    assert h["hotspot_pct_positive"] > 85 and h["coldspot_pct_positive"] < 5 and h["hotspot_xy"][0] < 400

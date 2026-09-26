@@ -57,6 +57,7 @@ def _cfg_from_query(q: dict) -> Config:
     if g("white"):
         cfg.white_point = [float(v) for v in g("white").split(",")]
     if g("segment") == "0": cfg.segment = False
+    if g("fit_stains") == "1": cfg.fit_stains = True
     return cfg.validate()
 
 
@@ -94,7 +95,8 @@ def _score(rgb: np.ndarray, cfg: Config, stem: str) -> dict:
     stamp = f"{_safe(stem)}_{rid}"
     paths = write_overlays(rgb, res, OUT, stamp)
     orig = OUT / f"{stamp}_original.png"; Image.fromarray(rgb).save(orig)
-    entry = {"name": _safe(stem), "rgb": rgb, "res": res, "orig": orig, "stamp": stamp}
+    entry = {"id": rid, "name": _safe(stem), "rgb": rgb, "res": res, "orig": orig, "stamp": stamp}
+    _snapshot(entry)
     if len(res.cells):
         entry["cells_csv"] = OUT / f"{stamp}_cells.csv"; res.cells.to_csv(entry["cells_csv"], index=False)
     with SESSION["lock"]:
@@ -105,42 +107,86 @@ def _score(rgb: np.ndarray, cfg: Config, stem: str) -> dict:
     return _payload(rid, entry, paths)
 
 
-def _rebin(rid: str, th: Thresholds) -> dict:
-    from .pipeline import write_overlays
+def _snapshot(entry: dict):
+    """Freeze the full-field result.  Every ROI and every re-bin is derived
+    from this, never from a previously derived state."""
+    r = entry["res"]
+    entry["base"] = {"labels": r.labels.copy(), "score_labels": r.score_labels.copy(), "tissue": r.tissue.copy(),
+                     "summary": dict(r.summary), "config": Config.from_dict(r.config.to_dict())}
+    entry.setdefault("roi", {"include": [], "exclude": []})
+
+
+def _derive(entry: dict, th: Thresholds | None = None, roi: dict | None = None) -> dict:
+    from scipy import ndimage as ndi
     from .metrics import per_cell_table, cell_summary, pixel_summary
+    from .pipeline import write_overlays, _qc_flags
+    res, base = entry["res"], entry["base"]
+    cfg = Config.from_dict(base["config"].to_dict())
+    if th is not None:
+        cfg.thresholds = th; cfg.profile_name = "app-adjusted"
+    elif res.config.profile_name == "app-adjusted":
+        cfg.thresholds = res.config.thresholds; cfg.profile_name = "app-adjusted"
+    if roi is not None:
+        entry["roi"] = {"include": roi.get("include") or [], "exclude": roi.get("exclude") or []}
+    roi = entry["roi"]
+    active = bool(roi["include"] or roi["exclude"])
+    shape = base["tissue"].shape
+    mask = _polys_mask(shape, roi["include"]) if roi["include"] else np.ones(shape, bool)
+    if roi["exclude"]:
+        mask &= ~_polys_mask(shape, roi["exclude"])
+    tissue = base["tissue"] & mask
+    labels, score_labels = base["labels"], base["score_labels"]
+    n = int(labels.max())
+    if active and n:
+        cy, cx = np.array(ndi.center_of_mass(labels > 0, labels, np.arange(1, n + 1))).T
+        keep = mask[np.clip(np.round(cy).astype(int), 0, shape[0] - 1), np.clip(np.round(cx).astype(int), 0, shape[1] - 1)]
+        lut = np.zeros(n + 1, np.int32)
+        lut[1:][keep] = np.arange(1, int(keep.sum()) + 1)      # one map for nuclei AND their rings
+        labels, score_labels = lut[labels], lut[score_labels]
+    dab, hema = res.conc[..., 1], res.conc[..., 0]
+    s = dict(base["summary"])
+    s.update(pixel_summary(dab, hema, tissue, cfg.thresholds, cfg.pixel_positive_od, cfg.mpp))
+    cells = pd.DataFrame()
+    if cfg.segment:
+        cells = per_cell_table(labels, score_labels, dab, hema, cfg.thresholds, cfg.cell_statistic, cfg.mpp)
+        s.update(cell_summary(cells, int(tissue.sum()), cfg.mpp))
+    s.update({"thr_weak": cfg.thresholds.weak, "thr_moderate": cfg.thresholds.moderate, "thr_strong": cfg.thresholds.strong, "profile": cfg.profile_name,
+              "roi_fraction": round(float(tissue.sum() / max(base["tissue"].sum(), 1)), 4) if active else None,
+              "roi_polygons": roi if active else None})
+    res.summary, res.cells, res.labels, res.score_labels, res.tissue, res.config = s, cells, labels, score_labels, tissue, cfg
+    res.qc = _qc_flags(s, cfg)
+    if active: res.qc.insert(0, f"scored inside a drawn region — {s['roi_fraction'] * 100:.0f}% of the tissue, {len(cells)} nuclei")
+    s["qc_flags"] = " | ".join(res.qc)
+    paths = write_overlays(entry["rgb"], res, OUT, entry["stamp"] + f"_d{int(time.time() * 1000) % 1000000}")
+    if len(cells):
+        entry["cells_csv"] = OUT / f"{entry['stamp']}_cells.csv"; cells.to_csv(entry["cells_csv"], index=False)
+    else:
+        entry.pop("cells_csv", None)
+    _record(entry["id"], entry, paths)
+    return _payload(entry["id"], entry, paths)
+
+
+def _cached(rid: str) -> dict:
     entry = SESSION["cache"].get(rid)
     if entry is None:
-        raise KeyError("that result is no longer cached — score the image again")
-    res = entry["res"]; cfg = Config.from_dict(res.config.to_dict()); cfg.thresholds = th; cfg.profile_name = "app-adjusted"
-    dab, hema = res.conc[..., 1], res.conc[..., 0]
-    s = dict(res.summary)
-    s.update(pixel_summary(dab, hema, res.tissue, th, cfg.pixel_positive_od, cfg.mpp))
-    if cfg.segment and res.labels.max() > 0:
-        res.cells = per_cell_table(res.labels, res.score_labels, dab, hema, th, cfg.cell_statistic, cfg.mpp)
-        s.update(cell_summary(res.cells, int(res.tissue.sum()), cfg.mpp))
-    s.update({"thr_weak": th.weak, "thr_moderate": th.moderate, "thr_strong": th.strong, "profile": cfg.profile_name})
-    res.summary = s; res.config = cfg
-    paths = write_overlays(entry["rgb"], res, OUT, entry["stamp"] + f"_t{int(time.time()*1000) % 100000}")
-    if len(res.cells):
-        entry["cells_csv"] = OUT / f"{entry['stamp']}_cells.csv"; res.cells.to_csv(entry["cells_csv"], index=False)
-    _record(rid, entry, paths)
-    return _payload(rid, entry, paths)
+        raise KeyError("that image is no longer in memory (only the last 12 are kept) — drop it again")
+    return entry
+
+
+def _rebin(rid: str, th: Thresholds) -> dict:
+    return _derive(_cached(rid), th=th)
+
+
+def _roi(rid: str, include: list, exclude: list) -> dict:
+    return _derive(_cached(rid), roi={"include": include, "exclude": exclude})
 
 
 def _reanalyze(rid: str, cfg: Config) -> dict:
-    from .pipeline import analyze, write_overlays
-    entry = SESSION["cache"].get(rid)
-    if entry is None:
-        raise KeyError("that image is no longer cached — drop it again")
-    res = analyze(entry["rgb"], cfg)
-    entry["res"] = res
-    paths = write_overlays(entry["rgb"], res, OUT, entry["stamp"] + f"_a{int(time.time()*1000) % 100000}")
-    if len(res.cells):
-        entry["cells_csv"] = OUT / f"{entry['stamp']}_cells.csv"; res.cells.to_csv(entry["cells_csv"], index=False)
-    else:
-        entry.pop("cells_csv", None)
-    _record(rid, entry, paths)
-    return _payload(rid, entry, paths)
+    from .pipeline import analyze
+    entry = _cached(rid)
+    entry["res"] = analyze(entry["rgb"], cfg)
+    _snapshot(entry)
+    return _derive(entry)          # re-applies any ROI the user drew
 
 
 def _stats(metric: str) -> dict:
@@ -211,6 +257,15 @@ def _report() -> Path:
     rows = [{k: v for k, v in r.items() if k != "id"} for r in SESSION["rows"]]
     build_report(assets, rows, stats, out)
     return out
+
+
+def _polys_mask(shape, polys) -> np.ndarray:
+    from PIL import ImageDraw
+    m = Image.new("L", (shape[1], shape[0]), 0); d = ImageDraw.Draw(m)
+    for poly in polys or []:
+        pts = [(float(x), float(y)) for x, y in poly]
+        if len(pts) >= 3: d.polygon(pts, fill=1)
+    return np.array(m, dtype=bool)
 
 
 def _calibrate(groups: dict) -> dict:
@@ -302,6 +357,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/rebin":
                 th = Thresholds(float(q["weak"][0]), float(q["moderate"][0]), float(q["strong"][0])); th.validate()
                 return self._send(200, _rebin(q["id"][0], th))
+            if u.path == "/api/roi":
+                body = json.loads(raw or b"{}")
+                return self._send(200, _roi(q["id"][0], body.get("include") or [], body.get("exclude") or []))
             if u.path == "/api/reanalyze":
                 return self._send(200, _reanalyze(q["id"][0], _cfg_from_query(q)))
             if u.path == "/api/group":

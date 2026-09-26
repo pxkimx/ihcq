@@ -32,6 +32,7 @@ class Config:
     # optics
     stains: tuple = ("hematoxylin", "dab")
     stain_vectors: Optional[list] = None          # overrides `stains` when set (from calibration)
+    fit_stains: bool = False                      # fit the two stain vectors to each image (Macenko) instead of textbook/profile
     white_point: Optional[list] = None            # per-channel I0; None → estimate per image
     # tissue
     tissue_od_threshold: float = 0.08
