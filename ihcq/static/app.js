@@ -48,10 +48,21 @@ async function pump() {
   if (running) return; running = true;
   while (pending.length) {
     const { f, li } = pending.shift(); const st = $(".st", li); st.textContent = $("#backend").value === "watershed" ? "scoring" : "scoring · model"; st.className = "st busy";
-    try { const r = await fetch("/api/score?" + settingsQuery(f.name), { method: "POST", body: f }); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); st.textContent = "H " + fmt(j.summary.h_score, 0); st.className = "st done"; li.onclick = () => show(j.id); li.dataset.id = j.id; add(j); show(j.id); }
+    try { let j = null;
+      if (/\.(svs|ndpi|scn|btf)$/i.test(f.name) || (/\.tiff?$/i.test(f.name) && f.size > 30e6)) j = await scoreSlide(f, st);
+      if (!j) { const r = await fetch("/api/score?" + settingsQuery(f.name), { method: "POST", body: f }); j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); }
+      st.textContent = "H " + fmt(j.summary.h_score, 0); st.className = "st done"; li.onclick = () => show(j.id); li.dataset.id = j.id; add(j); show(j.id); }
     catch (err) { st.textContent = "failed"; st.className = "st err"; li.title = err.message; toast(f.name + ": " + err.message, true); }
   }
   running = false;
+}
+async function scoreSlide(f, st) {
+  st.textContent = `uploading ${(f.size / 1e6).toFixed(0)} MB`;
+  const r = await fetch("/api/slide?" + settingsQuery(f.name), { method: "POST", body: f }); const d = await r.json();
+  if (!r.ok) { if (/not a tiled/.test(d.error || "")) return null; throw new Error(d.error || r.statusText); }
+  for (;;) { await new Promise(z => setTimeout(z, 1000)); const jr = await (await fetch("/api/job?id=" + d.job)).json();
+    if (jr.state === "error") throw new Error(jr.error); if (jr.state === "done") return jr.result;
+    st.textContent = jr.total ? `tile ${jr.done} / ${jr.total}` : jr.stage; }
 }
 /* demo menu */
 const menu = $("#demo-menu"); $("#demo").onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; }; document.addEventListener("click", () => menu.hidden = true);

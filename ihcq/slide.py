@@ -274,3 +274,19 @@ def analyze_slide(path, cfg=None, tile: int = 2048, overlap: int = 64, workers: 
         summary.update(score_cells(cells, int(agg["tissue_px"]), cfg, {}))
     sl.close()
     return summary, cells, ovw, scale, {"cfg": cfg, "tissue_overview": tmask}
+
+
+BIN_RGB = [(59, 130, 246), (245, 197, 24), (255, 138, 0), (229, 56, 59)]
+
+
+def overview_cells_image(ovw: np.ndarray, cells: pd.DataFrame, scale: float, radius: int = 2) -> np.ndarray:
+    """Overview with every scored cell drawn as a dot in its bin colour."""
+    from PIL import Image, ImageDraw
+    im = Image.fromarray(ovw.copy()); d = ImageDraw.Draw(im)
+    if len(cells):
+        xs, ys, bs = (cells.x.to_numpy() * scale), (cells.y.to_numpy() * scale), cells["bin"].to_numpy()
+        for k in (0, 1, 2, 3):                                  # negatives first so positives sit on top
+            m = bs == k
+            for x, y in zip(xs[m], ys[m]):
+                d.ellipse([x - radius, y - radius, x + radius, y + radius], fill=BIN_RGB[k])
+    return np.array(im)

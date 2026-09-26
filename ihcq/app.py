@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io as _io
 import json
+import os
 import socket
 import sys
 import tempfile
@@ -200,7 +201,15 @@ def _regions(rid: str, polys: list) -> dict:
     """Score every include polygon on its own (no merging), from the full-field snapshot."""
     from scipy import ndimage as ndi
     from .metrics import per_cell_table, cell_summary, pixel_summary
-    entry = _cached(rid); res, base = entry["res"], entry["base"]
+    entry = _cached(rid)
+    if entry.get("slide"):
+        out = []
+        for i, poly in enumerate(polys or [], 1):
+            p = _derive_slide(dict(entry, res=_clone_res(entry["res"])), roi={"include": [poly], "exclude": []})["summary"]
+            out.append({"region": i, **{k: p.get(k) for k in ("n_cells", "pct_positive", "pct_positive_ci95", "h_score", "allred_total", "irs", "pct_3plus", "cells_per_mm2", "cells_per_tissue_px1e4", "dab_area_fraction_pct", "her2_score", "pct_complete_any", "scored_population")}})
+        _derive_slide(entry)
+        return {"regions": out, "test": None}
+    res, base = entry["res"], entry["base"]
     cfg = res.config
     shape = base["tissue"].shape
     labels, score_labels = base["labels"], base["score_labels"]
@@ -236,7 +245,10 @@ def _classify(rid: str, tumour_pts: list, stroma_pts: list, tumour_only: bool = 
     """Per-image tumour/stroma classifier trained on clicked nuclei (QuPath-style object classifier)."""
     from scipy import ndimage as ndi
     from .tumour import rich_features, fit_clicks
-    entry = _cached(rid); res, base = entry["res"], entry["base"]
+    entry = _cached(rid)
+    if entry.get("slide"):
+        raise ValueError("the tumour classifier works on single fields for now — for a slide, draw a tumour region")
+    res, base = entry["res"], entry["base"]
     labels = base["labels"]; n = int(labels.max())
     if n < 10:
         raise ValueError("too few nuclei in this image to classify")
@@ -262,6 +274,11 @@ def _classify(rid: str, tumour_pts: list, stroma_pts: list, tumour_only: bool = 
     return out
 
 
+def _clone_res(res):
+    import copy
+    r = copy.copy(res); r.summary = dict(res.summary); return r
+
+
 def _cached(rid: str) -> dict:
     entry = SESSION["cache"].get(rid)
     if entry is None:
@@ -270,16 +287,20 @@ def _cached(rid: str) -> dict:
 
 
 def _rebin(rid: str, th: Thresholds) -> dict:
-    return _derive(_cached(rid), th=th)
+    e = _cached(rid)
+    return _derive_slide(e, th=th) if e.get("slide") else _derive(e, th=th)
 
 
 def _roi(rid: str, include: list, exclude: list) -> dict:
-    return _derive(_cached(rid), roi={"include": include, "exclude": exclude})
+    e = _cached(rid)
+    return (_derive_slide if e.get("slide") else _derive)(e, roi={"include": include, "exclude": exclude})
 
 
 def _reanalyze(rid: str, cfg: Config) -> dict:
     from .pipeline import analyze
     entry = _cached(rid)
+    if entry.get("slide"):
+        raise ValueError("slides are re-analyzed by dropping the file again (tile analysis is not cached); cut points and regions can be changed here")
     entry["res"] = analyze(entry["rgb"], cfg)
     _snapshot(entry)
     return _derive(entry)          # re-applies any ROI the user drew
@@ -422,6 +443,93 @@ def _project_open(raw: bytes) -> dict:
     return {"results": results, "saved": man.get("saved"), "mismatches": mismatches}
 
 
+JOBS: dict = {}
+
+
+def _slide_job(jid: str, path: str, cfg: Config, name: str):
+    """Background whole-slide analysis; registers the result like any other image."""
+    from .slide import analyze_slide, overview_cells_image
+    from .pipeline import Result
+    from .stains import stain_matrix, deconvolve
+    from . import overlay as ov
+    job = JOBS[jid]
+    try:
+        def prog(d, n): job.update(done=d, total=n, stage="analyzing tiles")
+        job["stage"] = "reading overview"
+        summ, cells, ovw, scale, info = analyze_slide(path, cfg, progress=prog)
+        summ["image"] = name
+        cfg2 = info["cfg"]
+        job["stage"] = "building overview"
+        matrix = stain_matrix(cfg2.stains, cfg2.stain_vectors)
+        conc = deconvolve(ovw, matrix, np.asarray(cfg2.white_point)).astype(np.float32)
+        oc = cells.copy()
+        if len(oc):
+            oc["x"] = oc["x"] * scale; oc["y"] = oc["y"] * scale; oc["area_px"] = np.maximum(1, (oc["area_px"] * scale * scale).round().astype(int))
+        z = np.zeros(ovw.shape[:2], np.int32)
+        res = Result(dict(summ), oc, conc, info["tissue_overview"], z, z, matrix, np.asarray(cfg2.white_point), cfg2)
+        from .pipeline import _qc_flags
+        summ.setdefault("saturated_fraction", 0.0)
+        res.qc = [f"whole slide: {summ['tiles_analyzed']} of {summ['tiles_total']} tiles analyzed at full resolution; the viewer shows a {ovw.shape[1]}×{ovw.shape[0]} overview"] + _qc_flags(summ, cfg2)
+        SESSION["seq"] += 1; rid = f"r{SESSION['seq']}"; stamp = f"{_safe(name)}_{rid}"
+        orig = OUT / f"{stamp}_original.png"; Image.fromarray(ovw).save(orig)
+        paths = {}
+        img = overview_cells_image(ovw, cells, scale)
+        paths["cells"] = OUT / f"{stamp}_cells.png"; ov.save(ov.with_caption(img, f"{name}  {summ.get('n_cells')} cells (overview)"), paths["cells"])
+        pm = ov.positivity_map(conc[..., 1], info["tissue_overview"], cfg2.thresholds)
+        paths["positivity"] = OUT / f"{stamp}_positivity.png"; ov.save(ov.with_caption(pm, f"{name}  positivity (overview resolution)"), paths["positivity"])
+        from .stains import reconstruct
+        paths["stains"] = OUT / f"{stamp}_stains.png"; ov.save(ov.with_caption(ov.stain_panels(ovw, conc, matrix, np.asarray(cfg2.white_point)), f"{name}  original | hematoxylin | DAB"), paths["stains"])
+        paths["hematoxylin"] = OUT / f"{stamp}_hematoxylin.png"; ov.save(reconstruct(conc, matrix, 0, np.asarray(cfg2.white_point)), paths["hematoxylin"])
+        paths["dab"] = OUT / f"{stamp}_dab.png"; ov.save(reconstruct(conc, matrix, 1, np.asarray(cfg2.white_point)), paths["dab"])
+        entry = {"id": rid, "name": _safe(name), "rgb": ovw, "res": res, "orig": orig, "stamp": stamp, "slide": True,
+                 "slide_cells": oc, "roi": {"include": [], "exclude": []}}
+        if len(cells):
+            entry["cells_csv"] = OUT / f"{stamp}_cells.csv"; cells.to_csv(entry["cells_csv"], index=False)
+        with SESSION["lock"]:
+            SESSION["cache"][rid] = entry
+        _record(rid, entry, paths)
+        job.update(state="done", result=_payload(rid, entry, paths))
+    except Exception as e:
+        job.update(state="error", error=f"{type(e).__name__}: {e}")
+    finally:
+        try: os.remove(path)
+        except OSError: pass
+
+
+def _derive_slide(entry: dict, th: Thresholds | None = None, roi: dict | None = None) -> dict:
+    """Cut points and regions for a slide result: re-binned per cell from the full-resolution
+    measurements; pixel metrics inside a region come from the overview."""
+    from .metrics import bin_intensity, pixel_summary
+    from .pipeline import score_cells
+    res = entry["res"]; cfg = Config.from_dict(res.config.to_dict())
+    if th is not None: cfg.thresholds = th; cfg.profile_name = "app-adjusted"
+    if roi is not None: entry["roi"] = {"include": roi.get("include") or [], "exclude": roi.get("exclude") or []}
+    roi = entry["roi"]; active = bool(roi["include"] or roi["exclude"])
+    cells = entry["slide_cells"].copy()
+    if len(cells): cells["bin"] = bin_intensity(cells["dab_od"].to_numpy(), cfg.thresholds)
+    shape = res.tissue.shape
+    mask = _polys_mask(shape, roi["include"]) if roi["include"] else np.ones(shape, bool)
+    if roi["exclude"]: mask &= ~_polys_mask(shape, roi["exclude"])
+    if active and len(cells):
+        yi = cells["y"].round().astype(int).clip(0, shape[0] - 1).to_numpy(); xi = cells["x"].round().astype(int).clip(0, shape[1] - 1).to_numpy()
+        cells = cells[mask[yi, xi]].reset_index(drop=True)
+    s = dict(res.summary)
+    if active or th is not None:
+        t = res.tissue & mask
+        s.update(pixel_summary(res.conc[..., 1], res.conc[..., 0], t, cfg.thresholds, cfg.pixel_positive_od, None))
+        s["pixel_metrics_resolution"] = "overview"
+    if len(cells):
+        mpp_ov = (cfg.mpp / (res.tissue.shape[1] / s["width"])) if cfg.mpp else None
+        c2 = Config.from_dict(cfg.to_dict()); c2.mpp = mpp_ov
+        s.update(score_cells(cells, int((res.tissue & mask).sum()), c2, {}))
+    s.update({"thr_weak": cfg.thresholds.weak, "thr_moderate": cfg.thresholds.moderate, "thr_strong": cfg.thresholds.strong, "profile": cfg.profile_name,
+              "roi_fraction": round(float((res.tissue & mask).sum() / max(res.tissue.sum(), 1)), 4) if active else None, "roi_polygons": roi if active else None})
+    res.summary, res.cells, res.config = s, cells, cfg
+    _record(entry["id"], entry)
+    paths = {k: Path(v) for k, v in SESSION["assets"][entry["id"]]["images"].items() if k != "original"}
+    return _payload(entry["id"], entry, paths)
+
+
 def _calibrate(groups: dict) -> dict:
     from .calibrate import fit_from_cells
     od = {}
@@ -491,6 +599,10 @@ class Handler(BaseHTTPRequestHandler):
             if not SESSION["rows"]:
                 return self._send(400, {"error": "nothing scored yet"})
             return self._file(_project_save(), "application/zip", download=True)
+        if u.path == "/api/job":
+            j = JOBS.get((q.get("id") or [""])[0])
+            if not j: return self._send(404, {"error": "no such job"})
+            return self._send(200, {k: v for k, v in j.items() if k != "thread"})
         if u.path == "/api/session":
             with SESSION["lock"]:
                 return self._send(200, {"rows": SESSION["rows"], "cached": list(SESSION["cache"].keys())})
@@ -501,7 +613,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urllib.parse.urlparse(self.path); q = urllib.parse.parse_qs(u.query)
-        n = int(self.headers.get("Content-Length", 0)); raw = self.rfile.read(n) if n else b""
+        n = int(self.headers.get("Content-Length", 0))
+        if u.path == "/api/slide":                       # stream to disk — slides can be gigabytes
+            name = (q.get("name") or ["slide.svs"])[0]
+            fd, tmp = tempfile.mkstemp(suffix=Path(name).suffix or ".tif", dir=OUT)
+            with os.fdopen(fd, "wb") as f:
+                left = n
+                while left > 0:
+                    chunk = self.rfile.read(min(8 << 20, left))
+                    if not chunk: break
+                    f.write(chunk); left -= len(chunk)
+            from .slide import is_slide
+            if not is_slide(tmp):
+                os.remove(tmp); return self._send(400, {"error": "not a tiled or pyramidal TIFF/SVS — drop it as a normal image"})
+            jid = f"j{int(time.time() * 1000)}"; JOBS[jid] = {"state": "running", "done": 0, "total": 0, "stage": "queued", "name": name}
+            th = threading.Thread(target=_slide_job, args=(jid, tmp, _cfg_from_query(q), Path(name).stem), daemon=True); th.start()
+            return self._send(200, {"job": jid})
+        raw = self.rfile.read(n) if n else b""
         try:
             if u.path == "/api/quit":
                 self._send(200, {"ok": True}); threading.Thread(target=SESSION["server"].shutdown, daemon=True).start(); return

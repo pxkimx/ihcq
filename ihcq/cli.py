@@ -67,6 +67,30 @@ def cmd_score(a):
     print(f"\nwrote {out}  ({len(df)} rows) and {out.with_suffix('.config.json')}")
 
 
+def cmd_slide(a):
+    from .slide import analyze_slide, overview_cells_image
+    from . import overlay as ov
+    cfg = _cfg_from_args(a)
+    rows = []
+    for path in a.slides:
+        def prog(d, n, name=Path(path).name):
+            print(f"\r  {name}: tile {d}/{n}", end="", flush=True)
+        s, cells, ovw, scale, info = analyze_slide(path, cfg, tile=a.tile, workers=a.workers, progress=prog, max_tiles=a.max_tiles)
+        print()
+        rows.append(s)
+        print(f"  {s['image']}: {s['width']}x{s['height']} px, {s['tiles_analyzed']}/{s['tiles_total']} tiles, cells={s.get('n_cells')} "
+              f"+={s.get('pct_positive')}% H={s.get('h_score')} DAB area={s['dab_area_fraction_pct']}%" + (f" HER2 {s['her2_score']}" if s.get('her2_score') else ""))
+        stem = Path(path).stem
+        if a.overlays:
+            Path(a.overlays).mkdir(parents=True, exist_ok=True)
+            ov.save(ov.with_caption(overview_cells_image(ovw, cells, scale), f"{stem}  {s.get('n_cells')} cells  H={s.get('h_score')}  +={s.get('pct_positive')}%"), Path(a.overlays) / f"{stem}_overview_cells.png")
+        if a.cells_dir and len(cells):
+            Path(a.cells_dir).mkdir(parents=True, exist_ok=True); cells.to_csv(Path(a.cells_dir) / f"{stem}_cells.csv", index=False)
+    out = Path(a.output); out.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(out, index=False); cfg.to_json(out.with_suffix(".config.json"))
+    print(f"wrote {out}")
+
+
 def cmd_calibrate(a):
     from .calibrate import calibrate, fit_to_scores
     base = Config.from_json(a.profile) if a.profile else Config()
@@ -163,6 +187,19 @@ def main(argv=None):
     s.add_argument("--fit-stains", dest="fit_stains", action="store_true", help="fit stain vectors to each image (Macenko) instead of textbook values")
     s.add_argument("--max-side", type=int, help="for pyramidal TIFFs: read the level near this size")
     s.set_defaults(func=cmd_score)
+
+    sl = sub.add_parser("slide", help="analyze whole-slide images (SVS / pyramidal TIFF) tile by tile")
+    sl.add_argument("slides", nargs="+")
+    sl.add_argument("-o", "--output", default="ihcq_slides.csv")
+    sl.add_argument("--overlays", help="directory for overview images with scored cells")
+    sl.add_argument("--cells-dir", help="directory for per-cell CSVs")
+    sl.add_argument("--profile"); sl.add_argument("--thresholds", nargs=3, type=float, metavar=("WEAK", "MOD", "STRONG"))
+    sl.add_argument("--compartment", choices=["nuclear", "membrane", "cytoplasm", "cell"])
+    sl.add_argument("--cell-statistic", dest="cell_statistic", choices=["mean", "median", "p90"])
+    sl.add_argument("--mpp", type=float, help="override the pixel size read from the slide")
+    sl.add_argument("--tile", type=int, default=2048); sl.add_argument("--workers", type=int)
+    sl.add_argument("--max-tiles", dest="max_tiles", type=int, help="analyze only the first N tissue tiles (quick look)")
+    sl.set_defaults(func=cmd_slide)
 
     c = sub.add_parser("calibrate", help="fit intensity thresholds from control images")
     for cat in ("negative", "weak", "moderate", "strong"):
