@@ -7,3 +7,4 @@ results/
 app_icon.png
 IHCQ.icns
 IHCQ.app/
+.venv-dl/

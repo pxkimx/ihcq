@@ -6,6 +6,14 @@ from scipy import ndimage as ndi
 from skimage import morphology
 
 
+def remove_small(mask: np.ndarray, n: int) -> np.ndarray:
+    """Drop connected components smaller than `n` px, on any scikit-image version."""
+    try:
+        return morphology.remove_small_objects(mask, max_size=n - 1)
+    except TypeError:
+        return morphology.remove_small_objects(mask, min_size=n)
+
+
 def tissue_mask(od_total: np.ndarray, threshold: float = 0.08, min_size: int = 400, close_radius: int = 3,
                 fill_holes: bool = True, smooth_sigma: float = 4.0) -> np.ndarray:
     """Pixels that belong to the tissue footprint.
@@ -21,11 +29,11 @@ def tissue_mask(od_total: np.ndarray, threshold: float = 0.08, min_size: int = 4
     field = ndi.gaussian_filter(od_total.astype(np.float32), smooth_sigma) if smooth_sigma else od_total
     mask = field > threshold
     if close_radius > 0:
-        mask = morphology.binary_closing(mask, morphology.disk(close_radius))
+        mask = morphology.closing(mask, morphology.disk(close_radius)).astype(bool)
     if fill_holes:
         mask = ndi.binary_fill_holes(mask)
     if min_size > 0:
-        mask = morphology.remove_small_objects(mask, min_size=min_size)
+        mask = remove_small(mask, min_size)
     return mask
 
 

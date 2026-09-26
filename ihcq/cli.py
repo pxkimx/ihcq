@@ -29,6 +29,8 @@ def _cfg_from_args(a) -> Config:
         cfg.white_point = [float(v) for v in a.white]
     if getattr(a, "radius", None):
         cfg.nucleus_radius_px = int(a.radius)
+    if getattr(a, "stardist_prob", None):
+        cfg.stardist_prob = a.stardist_prob
     if getattr(a, "no_segment", False):
         cfg.segment = False
     if getattr(a, "thresholds", None):
@@ -150,7 +152,8 @@ def main(argv=None):
     s.add_argument("--compartment", choices=["nuclear", "membrane", "cytoplasm"])
     s.add_argument("--cell-statistic", dest="cell_statistic", choices=["mean", "median", "p90"])
     s.add_argument("--segment-on", dest="segment_on", choices=["auto", "hema", "hema+dab", "gray"])
-    s.add_argument("--backend", choices=["watershed", "stardist"])
+    s.add_argument("--backend", choices=["watershed", "stardist", "hybrid"])
+    s.add_argument("--stardist-prob", dest="stardist_prob", type=float, help="StarDist detection probability (default 0.35)")
     s.add_argument("--mpp", type=float, help="microns per pixel (enables µm² and per-mm² outputs)")
     s.add_argument("--white", nargs=3, type=float, metavar=("R", "G", "B"), help="white point measured on bare glass of this slide")
     s.add_argument("--radius", type=int, help="typical nuclear radius in px (default 8)")

@@ -1,10 +1,12 @@
 #!/bin/bash
 # Launches the ihcq local UI and opens it in the default browser.
-# Prefers the isolated "ihcq-dl" conda env (StarDist backend available);
+# Prefers the isolated .venv-dl (StarDist backend available);
 # falls back to the base Anaconda Python (classical backend only).
 PROJECT="${IHCQ_HOME:-@PROJECT@}"
 LOG="$HOME/Library/Logs/ihcq.log"
-if [ -x /opt/anaconda3/envs/ihcq-dl/bin/python3 ]; then
+if [ -x "$PROJECT/.venv-dl/bin/python3" ]; then
+  PY="$PROJECT/.venv-dl/bin/python3"
+elif [ -x /opt/anaconda3/envs/ihcq-dl/bin/python3 ]; then
   PY=/opt/anaconda3/envs/ihcq-dl/bin/python3
 else
   PY=/opt/anaconda3/bin/python3

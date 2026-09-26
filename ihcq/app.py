@@ -167,7 +167,7 @@ table{border-collapse:collapse;width:100%;font-size:12.5px;font-variant-numeric:
  <div class="card"><h3>Analysis</h3>
   <label>Compartment</label><select id="compartment"><option value="nuclear">Nuclear (Ki-67, ER, PR, p53)</option><option value="membrane">Membrane (HER2, PD-L1)</option><option value="cytoplasm">Cytoplasm</option></select>
   <div class="row"><div><label>Pixel size (µm/px)</label><input id="mpp" type="number" step="0.01" placeholder="e.g. 0.25"></div><div><label>or nuclear radius (px)</label><input id="radius" type="number" step="1" placeholder="8"></div></div>
-  <label>Nucleus finder</label><select id="backend"><option value="watershed">Classical (fast, no model)</option><option value="stardist">StarDist (better on crowded / pale nuclei)</option></select>
+  <label>Nucleus finder</label><select id="backend"><option value="watershed">Classical (fast, no model)</option><option value="hybrid">Hybrid — StarDist + classical (best overall)</option><option value="stardist">StarDist only (precise on well-stained tissue)</option></select>
   <label>Per-cell statistic</label><select id="statistic"><option value="mean">Mean DAB OD</option><option value="median">Median</option><option value="p90">90th percentile (punctate / membrane)</option></select>
  </div>
  <div class="card"><h3>Intensity cut points (DAB OD)</h3>

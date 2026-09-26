@@ -12,6 +12,7 @@ from scipy import ndimage as ndi
 from skimage import filters, morphology, segmentation, feature, measure
 
 from .config import Config
+from .tissue import remove_small
 
 
 def segmentation_channel(conc: np.ndarray, rgb: np.ndarray, how: str) -> np.ndarray:
@@ -67,9 +68,9 @@ def segment_watershed(chan: np.ndarray, tissue: np.ndarray, cfg: Config, exclude
         mad = np.median(np.abs(inside - med)) * 1.4826
         t = max(0.015, min(t_otsu, med + 4 * mad))
         fg = (flat > t) & (sm > 0.03) & tissue
-    fg = morphology.remove_small_objects(fg, max(4, int(0.15 * np.pi * r * r)))
+    fg = remove_small(fg, max(4, int(0.15 * np.pi * r * r)))
     fg = ndi.binary_fill_holes(fg)
-    fg = morphology.binary_opening(fg, morphology.disk(1))
+    fg = morphology.opening(fg, morphology.disk(1)).astype(bool)
     if not fg.any():
         return np.zeros(chan.shape, dtype=np.int32)
 
@@ -151,7 +152,7 @@ def rescue_dab_nuclei(labels: np.ndarray, dab: np.ndarray, tissue: np.ndarray, c
     are left alone — so this rescue is safe to run on every stain.
     """
     fg = (dab >= od_floor) & tissue
-    fg = ndi.binary_fill_holes(morphology.binary_opening(fg, morphology.disk(1)))
+    fg = ndi.binary_fill_holes(morphology.opening(fg, morphology.disk(1)).astype(bool))
     cand = measure.label(fg)
     if cand.max() == 0:
         return labels
@@ -183,10 +184,37 @@ def assumed_radius(cfg: Config) -> int:
     return 8
 
 
+def _classical(rgb, conc, tissue, cfg):
+    chan = segmentation_channel(conc, rgb, cfg.segment_on)
+    exclude = (conc[..., 1] >= cfg.thresholds.weak) if cfg.segment_on in ("auto", "hema") else None
+    r = assumed_radius(cfg)
+    return segment_watershed(chan, tissue, cfg, exclude=exclude, radius=r,
+                             max_area=max(cfg.nucleus_max_area_px, int(6 * np.pi * r * r)))
+
+
+def merge_missing(base: np.ndarray, extra: np.ndarray, max_overlap: float = 0.2) -> np.ndarray:
+    """Add objects from `extra` that `base` has no nucleus for (overlap < 20%)."""
+    out = base.copy()
+    nxt = int(base.max()) + 1
+    for r in measure.regionprops(extra):
+        sl = r.slice
+        m = extra[sl] == r.label
+        if (base[sl][m] > 0).mean() > max_overlap:
+            continue
+        out[sl][m & (base[sl] == 0)] = nxt
+        nxt += 1
+    return out
+
+
 def segment_nuclei(rgb: np.ndarray, conc: np.ndarray, tissue: np.ndarray, cfg: Config) -> np.ndarray:
-    if cfg.backend == "stardist":
+    if cfg.backend in ("stardist", "hybrid"):
         labels = segment_stardist(rgb, cfg)
         labels = np.where(tissue, labels, 0).astype(np.int32)
+        if cfg.backend == "hybrid":
+            # StarDist (trained on H&E) is precise but blind to faintly
+            # counterstained nuclei; the classical detector sees those.  Keep
+            # StarDist's outlines and add classical nuclei it has no match for.
+            labels = merge_missing(labels, _classical(rgb, conc, tissue, cfg))
         # the H&E model can skip a nucleus that is solid brown; same rescue as the classical path
         labels = rescue_dab_nuclei(labels, conc[..., 1], tissue, cfg, od_floor=cfg.thresholds.strong)
         return drop_debris(labels)

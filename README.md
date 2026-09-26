@@ -21,11 +21,14 @@ NumPy 1.x, which is what a typical Anaconda base carries. Don't install it
 into base; give it its own env:
 
 ```bash
-conda create -n ihcq-dl python=3.12
-conda run -n ihcq-dl pip install "numpy>=2,<2.3" scipy scikit-image pandas pillow tifffile "tensorflow>=2.16" stardist
-conda run -n ihcq-dl pip install -e . --no-deps
-conda run -n ihcq-dl ihcq score fields/*.png --backend stardist -o results.csv
+python3 -m venv .venv-dl                      # inside the project; any Python ≥3.9 works
+.venv-dl/bin/pip install "numpy>=2,<2.3" scipy scikit-image pandas pillow tifffile "tensorflow>=2.16" stardist
+.venv-dl/bin/pip install -e . --no-deps
+.venv-dl/bin/ihcq score fields/*.png --backend stardist -o results.csv
 ```
+
+(A conda env works the same way if your conda is healthy; a plain venv has
+fewer moving parts.)
 
 The classical backend needs none of this and runs anywhere the core installs.
 
@@ -41,8 +44,8 @@ one downloadable CSV. Nothing leaves the machine — it is a local server on
 the loopback interface with no dependencies beyond ihcq itself.
 
 `IHCQ.app` (built by `scripts/build_app.sh`, or already on the Desktop) is a
-double-clickable launcher for the same thing. It uses the `ihcq-dl`
-environment when it exists, so the StarDist backend is available in the
+double-clickable launcher for the same thing. It uses `.venv-dl`
+when it exists, so the StarDist backend is available in the
 menu; otherwise it uses the base Python and the classical backend. Logs go
 to `~/Library/Logs/ihcq.log`; the *Quit* button in the page stops the server.
 
@@ -157,7 +160,25 @@ Default settings, no calibration, no training:
 | Ki-67 index, mean absolute error | 5.3 percentage points |
 | Ki-67 index, Pearson r across fields | 0.97 |
 
-Per region, truth vs measured Ki-67 index: 6.1 → 5.2 %, 8.5 → 8.3 %,
+**Three nucleus finders, same truth:**
+
+| backend | recall | precision | pos/neg agreement | Ki-67 index MAE | bias |
+|---|---|---|---|---|---|
+| `watershed` (classical, default) | 0.77 | 0.65 | 96.1 % | 5.3 pp | +4.4 |
+| `stardist` (pretrained H&E model, p = 0.35) | 0.65 | 0.89 | 99.2 % | 18.9 pp | +18 |
+| `hybrid` (StarDist, then classical for what it missed) | **0.82** | 0.71 | 96.9 % | **5.2 pp** | **+3.0** |
+
+StarDist alone is the most *precise* — what it outlines is a nucleus — and
+on well-counterstained fields it beats the classical detector outright
+(recall 0.91–0.93 on regions 22 and 31). But it was trained on H&E and is
+blind to the ghost-pale negatives of regions 40 and 7 (recall 0.3–0.5),
+which is exactly where the Ki-67 index goes wrong. The hybrid keeps
+StarDist's outlines and adds classical detections it has no match for; it is
+the best overall and the recommended backend when the `.venv-dl` environment
+is available. The classical default needs no model and is within a point of
+it on this set.
+
+Per region, classical, truth vs measured Ki-67 index: 6.1 → 5.2 %, 8.5 → 8.3 %,
 13.6 → 19.2 %, 34.7 → 33.4 %, 36.5 → 43.3 %, 48.3 → 65.0 %. The two that
 miss are instructive. Region 40's negative nuclei are ghost-pale and sit in
 heavy brown cytoplasm; the truth there comes from DAPI and includes nuclei
@@ -206,10 +227,10 @@ templates.
 
 ## Limits, honestly
 
-- Watershed segmentation handles round, reasonably counterstained nuclei at
-  20–40×. Crowded tumour, spindle cells, and ghost-pale negatives next to
-  heavy brown cytoplasm lose recall (see the evaluation) — `--backend
-  stardist` is the upgrade path, and the rest of the pipeline is unchanged.
+- No nucleus finder here fully recovers ghost-pale negatives next to heavy
+  brown cytoplasm (regions 40 and 7 in the evaluation). `--backend hybrid`
+  is the best available; the rest of the pipeline is identical across
+  backends, so a better segmenter drops straight in.
 - Cytoplasmic/membrane compartments are geometric rings around nuclei — an
   approximation, and cells without a visible nucleus are not counted.
 - Whole slides: `load_image(..., max_side=N)` reads a pyramid level, but there

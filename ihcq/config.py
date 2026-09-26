@@ -45,8 +45,8 @@ class Config:
     nucleus_smooth_sigma: float = 1.0
     nucleus_radius_px: Optional[int] = None       # typical nuclear radius in px; None → from mpp or estimated
     nucleus_od_threshold: Optional[float] = None  # None → Otsu on the segmentation channel
-    backend: str = "watershed"                    # watershed | stardist
-    stardist_prob: Optional[float] = None         # None → model default (0.69 for 2D_versatile_he)
+    backend: str = "watershed"                    # watershed | stardist | hybrid
+    stardist_prob: Optional[float] = 0.35         # detection probability; the H&E model's own 0.69 misses pale IHC nuclei
     stardist_nms: Optional[float] = None          # None → model default (0.3)
     # scoring
     compartment: str = "nuclear"                  # nuclear | membrane | cytoplasm
