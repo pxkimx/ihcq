@@ -214,6 +214,17 @@ cells, i.e. little or no tumour in the field). The hybrid backend gives the
 same numbers within noise (AUC 0.83 / 0.80 / 0.73): on this material the
 nucleus finder is not the limiting factor.
 
+**Calibrating to this scanner.** Fitting the three cut points on the
+even-numbered patches (`scripts/bci_calibrate.py`) gives 0.12 / 0.20 / 0.36
+— about half the DeepLIIF-era defaults, because this material is scanned
+paler — and on the odd-numbered patches raises balanced accuracy from 0.28
+to 0.48, exact agreement from 0.15 to 0.43 and HER2-negative-vs-positive
+agreement from 0.39 to 0.60, with rank agreement unchanged (Spearman ≈ 0.42,
+as re-binning cannot change ranks). One caution learned the hard way: fit
+to *balanced* accuracy. Maximising exact accuracy on these labels returns
+cut points of 0.04 / 0.08 that call nearly every patch "2+" — the majority
+class — and looks better while measuring nothing.
+
 Two things this evaluation cannot do, and says so: it has no tumour/stroma
 distinction, so percentages are over *all* cells and stroma dilutes them
 (an ASCO/CAP score is over tumour cells); and it cannot separate label

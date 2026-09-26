@@ -16,7 +16,6 @@ from scipy.stats import spearmanr
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ihcq import Config, analyze
 from ihcq.io import load_image
-from ihcq.metrics import bin_intensity
 from ihcq.config import Thresholds
 
 ROOT = "data/public/BCI/BCI_dataset/IHC/test"
@@ -33,31 +32,31 @@ for i, f in enumerate(files):
 np.savez_compressed("results/bci/percell_test_membrane_p90.npz", y=y, names=np.array([Path(f).name for f in files]),
                     cells=np.array(cells, dtype=object), allow_pickle=True)
 
-def score(th, idx, pct=10.0):
-    pred = np.zeros(len(idx), int)
-    for k, i in enumerate(idx):
-        c = cells[i]
-        if c.size == 0: continue
-        b = bin_intensity(c, th)
-        p1, p2, p3 = (b >= 1).mean() * 100, (b >= 2).mean() * 100, (b >= 3).mean() * 100
-        pred[k] = 3 if p3 >= pct else 2 if p2 >= pct else 1 if p1 >= pct else 0
-    return pred
-
-fit_idx, val_idx = np.arange(0, len(files), 2), np.arange(1, len(files), 2)
+cells_sorted = [np.sort(c) for c in cells]
 grid = np.round(np.arange(0.04, 1.2, 0.04), 3)
-best, best_s = None, -1
+F = {t: np.array([(c.size - np.searchsorted(c, t)) / c.size * 100 if c.size else 0.0 for c in cells_sorted]) for t in grid}
+
+def predict(w, m, s, pct=10.0):
+    """ASCO/CAP-style rule over ALL cells: 3+ if ≥pct% of cells strong, 2+ if ≥pct% moderate-or-more, 1+ if ≥pct% any."""
+    return np.where(F[s] >= pct, 3, np.where(F[m] >= pct, 2, np.where(F[w] >= pct, 1, 0)))
+
+def balanced_acc(p, t):
+    return float(np.mean([(p[t == k] == k).mean() for k in range(4) if (t == k).any()]))
+
+# Objective: balanced accuracy, NOT exact accuracy.  Exact accuracy on these
+# labels is maximised by calling almost everything "2+" (46 % of patches),
+# which a first version of this script duly did with cut points of 0.04/0.08.
+fit_idx, val_idx = np.arange(0, len(files), 2), np.arange(1, len(files), 2)
+best, best_b = None, -1
 for w, m, s in product(grid, grid, grid):
-    if not (w < m < s): continue
-    pred = score(Thresholds(w, m, s), fit_idx)
-    acc1 = (np.abs(pred - y[fit_idx]) <= 1).mean(); exact = (pred == y[fit_idx]).mean()
-    sc = exact + 0.5 * acc1
-    if sc > best_s: best, best_s = (w, m, s), sc
+    if w < m < s:
+        b = balanced_acc(predict(w, m, s)[fit_idx], y[fit_idx])
+        if b > best_b: best, best_b = (w, m, s), b
 w, m, s = best
-print(f"\nfitted cut points (even patches): weak={w} moderate={m} strong={s}   (defaults 0.15 / 0.40 / 0.80)")
-for name, th in (("default", Thresholds()), ("fitted", Thresholds(w, m, s))):
-    pred = score(th, val_idx); yv = y[val_idx]
-    cm = pd.crosstab(pd.Series(yv, name="truth"), pd.Series(pred, name="pred"))
-    rho = spearmanr(yv, pred).correlation
-    print(f"\n== held-out odd patches, {name} thresholds ==")
-    print(cm.to_string())
-    print(f"exact {np.mean(pred==yv):.3f}   within-one {np.mean(np.abs(pred-yv)<=1):.3f}   neg(0/1+) vs pos(2+/3+) {np.mean((pred>=2)==(yv>=2)):.3f}   Spearman {rho:.3f}")
+print(f"\nfitted cut points (even patches, balanced accuracy {best_b:.3f}): weak={w} moderate={m} strong={s}   (defaults 0.15 / 0.40 / 0.80)")
+for name, (a, b_, c) in (("default", (0.16, 0.40, 0.80)), ("fitted", (w, m, s))):
+    pred, yv = predict(a, b_, c)[val_idx], y[val_idx]
+    cm = pd.crosstab(pd.Series(yv, name="truth"), pd.Series(pred, name="pred")).reindex(index=range(4), columns=range(4), fill_value=0)
+    print(f"\n== held-out odd patches, {name} thresholds ==\n{cm.to_string()}")
+    print(f"balanced {balanced_acc(pred, yv):.3f}   exact {np.mean(pred==yv):.3f}   within-one {np.mean(np.abs(pred-yv)<=1):.3f}   "
+          f"neg(0/1+) vs pos(2+/3+) {np.mean((pred>=2)==(yv>=2)):.3f}   Spearman {spearmanr(yv, pred).correlation:.3f}")
