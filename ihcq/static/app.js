@@ -82,6 +82,15 @@ function finishPick(ix, iy) { const rgb = sampleRGB(ix, iy), k = state.pick;
 $("#vec-reset").onclick = () => { state.custom = { white: null, hema: null, dab: null }; renderVecs(); markDirty(); toast("Back to textbook vectors and automatic white point"); };
 function markDirty() { if (state.cur) { const b = $("#reanalyze"); b.textContent = "Re-analyze current image with these settings ↻"; } }
 
+/* ---------- projects ---------- */
+$("#proj-save").addEventListener("click", e => { if (!state.order.length) { e.preventDefault(); toast("Score an image first — there is nothing to save", true); } else toast("Saving project — originals, settings, regions and groups"); });
+$("#proj-open").onchange = async e => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; toast(`Opening ${f.name} — re-analyzing every image…`);
+  try { const r = await fetch("/api/project/open", { method: "POST", body: f }); const d = await r.json(); if (!r.ok) throw new Error(d.error);
+    for (const j of d.results) { add(j); if (j.summary.roi_polygons) state.rois[j.id] = j.summary.roi_polygons; }
+    if (d.results.length) show(d.results[d.results.length - 1].id);
+    toast(`Opened ${d.results.length} image${d.results.length === 1 ? "" : "s"} (saved ${d.saved})${d.mismatches.length ? ` · results differ for ${d.mismatches.length} — software changed since saving` : " · results reproduced exactly"}`, d.mismatches.length > 0); }
+  catch (err) { toast("Could not open project: " + err.message, true); } };
+
 /* ---------- apply to all ---------- */
 $("#apply-all").onclick = async () => { const ids = [...state.order]; if (!ids.length) return; const b = $("#apply-all"); b.disabled = true; let ok = 0, gone = 0;
   for (let i = 0; i < ids.length; i++) { b.textContent = `Re-analyzing ${i + 1} of ${ids.length}…`; const old = state.results[ids[i]];

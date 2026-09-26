@@ -20,6 +20,22 @@ def bin_intensity(od: np.ndarray, th: Thresholds) -> np.ndarray:
 # --------------------------------------------------------------------------
 # cell-level
 # --------------------------------------------------------------------------
+def grouped_percentile(labels: np.ndarray, values: np.ndarray, n: int, q: float) -> np.ndarray:
+    """q-th percentile of `values` within each label 1..n (0 where a label has no pixels)."""
+    m = labels > 0
+    lab = labels[m].astype(np.int64); val = values[m]
+    order = np.lexsort((val, lab)); lab, val = lab[order], val[order]
+    counts = np.bincount(lab, minlength=n + 1)[1:]
+    starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    out = np.zeros(n)
+    ok = counts > 0
+    pos = starts[ok] + (counts[ok] - 1) * q / 100.0
+    lo = np.floor(pos).astype(np.int64); hi = np.minimum(lo + 1, starts[ok] + counts[ok] - 1)
+    frac = pos - lo
+    out[ok] = val[lo] * (1 - frac) + val[hi] * frac          # numpy's default 'linear' percentile
+    return out
+
+
 def per_cell_table(labels: np.ndarray, score_labels: np.ndarray, dab: np.ndarray, hema: np.ndarray,
                    th: Thresholds, statistic: str = "mean", mpp: float | None = None) -> pd.DataFrame:
     """One row per cell: position, size, DAB summary in the scoring compartment, bin."""
@@ -35,8 +51,8 @@ def per_cell_table(labels: np.ndarray, score_labels: np.ndarray, dab: np.ndarray
         dab_stat = ndi.mean(dab, score_labels, idx)
     elif statistic == "median":
         dab_stat = ndi.median(dab, score_labels, idx)
-    else:  # p90
-        dab_stat = np.array([np.percentile(dab[score_labels == i], 90) if (score_labels == i).any() else 0.0 for i in idx])
+    else:  # p90 — grouped percentile by sorting once (the per-cell mask loop was O(cells × pixels))
+        dab_stat = grouped_percentile(score_labels, dab, n, 90)
     dab_stat = np.nan_to_num(np.asarray(dab_stat, dtype=np.float64))
     bins = bin_intensity(dab_stat, th)
     from skimage.measure import regionprops

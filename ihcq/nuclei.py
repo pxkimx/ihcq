@@ -33,7 +33,7 @@ def segmentation_channel(conc: np.ndarray, rgb: np.ndarray, how: str) -> np.ndar
 
 
 def segment_watershed(chan: np.ndarray, tissue: np.ndarray, cfg: Config, exclude: np.ndarray | None = None,
-                      radius: int | None = None, max_area: int | None = None) -> np.ndarray:
+                      radius: int | None = None, max_area: int | None = None, forbid: np.ndarray | None = None) -> np.ndarray:
     """Background-flattened threshold + distance-transform watershed.
 
     Nuclei are detected as *local* blobs: the channel is flattened by
@@ -68,6 +68,8 @@ def segment_watershed(chan: np.ndarray, tissue: np.ndarray, cfg: Config, exclude
         mad = np.median(np.abs(inside - med)) * 1.4826
         t = max(0.015, min(t_otsu, med + 4 * mad))
         fg = (flat > t) & (sm > 0.03) & tissue
+    if forbid is not None:
+        fg &= ~forbid
     fg = remove_small(fg, max(4, int(0.15 * np.pi * r * r)))
     fg = ndi.binary_fill_holes(fg)
     fg = morphology.opening(fg, morphology.disk(1)).astype(bool)
@@ -176,6 +178,31 @@ def rescue_dab_nuclei(labels: np.ndarray, dab: np.ndarray, tissue: np.ndarray, c
     return out
 
 
+def crosstalk_k(conc: np.ndarray, min_px: int = 500) -> float:
+    """Hematoxylin that the deconvolution puts into pure-DAB pixels, per unit DAB.
+
+    In a strongly brown pixel with no nucleus the true hematoxylin is ~0, so
+    any hematoxylin there is leak from imperfect stain vectors.  The 10th
+    percentile of hema/DAB over pixels with DAB > 0.5 is a conservative
+    estimate (most such pixels are membrane or cytoplasm, not nuclei).
+    Zero when the stain vectors fit, as on well-matched slides."""
+    hema, dab = conc[..., 0], conc[..., 1]
+    m = dab > 0.5
+    if m.sum() < min_px:
+        return 0.0
+    return float(max(0.0, np.percentile(hema[m] / dab[m], 10)))
+
+
+def _hema_for_segmentation(conc: np.ndarray, cfg: Config):
+    """For membrane / cytoplasmic markers, subtract the measured DAB→hematoxylin
+    leak so brown cytoplasm cannot rise above the nuclear threshold.  Not for
+    nuclear markers, where DAB sits in the nuclei being found."""
+    if cfg.compartment == "nuclear":
+        return conc[..., 0], 0.0
+    k = crosstalk_k(conc)
+    return np.clip(conc[..., 0] - k * conc[..., 1], 0, None), k
+
+
 def assumed_radius(cfg: Config) -> int:
     if cfg.nucleus_radius_px:
         return int(cfg.nucleus_radius_px)
@@ -186,6 +213,8 @@ def assumed_radius(cfg: Config) -> int:
 
 def _classical(rgb, conc, tissue, cfg):
     chan = segmentation_channel(conc, rgb, cfg.segment_on)
+    if cfg.segment_on in ("auto", "hema"):
+        chan, _ = _hema_for_segmentation(conc, cfg)
     exclude = (conc[..., 1] >= cfg.thresholds.weak) if cfg.segment_on in ("auto", "hema") else None
     r = assumed_radius(cfg)
     return segment_watershed(chan, tissue, cfg, exclude=exclude, radius=r,
@@ -215,10 +244,13 @@ def segment_nuclei(rgb: np.ndarray, conc: np.ndarray, tissue: np.ndarray, cfg: C
             # counterstained nuclei; the classical detector sees those.  Keep
             # StarDist's outlines and add classical nuclei it has no match for.
             labels = merge_missing(labels, _classical(rgb, conc, tissue, cfg))
-        # the H&E model can skip a nucleus that is solid brown; same rescue as the classical path
-        labels = rescue_dab_nuclei(labels, conc[..., 1], tissue, cfg, od_floor=cfg.thresholds.strong)
+        # the H&E model can skip a nucleus that is solid brown; same rescue as the classical path (nuclear markers only)
+        if cfg.compartment == "nuclear":
+            labels = rescue_dab_nuclei(labels, conc[..., 1], tissue, cfg, od_floor=cfg.thresholds.strong)
         return drop_debris(labels)
     chan = segmentation_channel(conc, rgb, cfg.segment_on)
+    if cfg.segment_on in ("auto", "hema"):
+        chan, _ = _hema_for_segmentation(conc, cfg)
     exclude = (conc[..., 1] >= cfg.thresholds.weak) if cfg.segment_on in ("auto", "hema") else None
     # Nuclear radius: given, or from pixel size (a typical nucleus is ~4 µm
     # across the radius), else 8 px (≈20× at 0.5 µm/px).  It is not estimated
@@ -234,9 +266,50 @@ def segment_nuclei(rgb: np.ndarray, conc: np.ndarray, tissue: np.ndarray, cfg: C
         r = 8
     labels = segment_watershed(chan, tissue, cfg, exclude=exclude, radius=r,
                                max_area=max(cfg.nucleus_max_area_px, int(6 * np.pi * r * r)))
-    if cfg.segment_on == "auto":
+    # Rescue quenched 3+ nuclei only for nuclear markers: with a membrane or
+    # cytoplasmic stain a whole brown cell is a compact solid blob and would
+    # be "rescued" as a giant nucleus.
+    if cfg.segment_on == "auto" and cfg.compartment == "nuclear":
         labels = rescue_dab_nuclei(labels, conc[..., 1], tissue, cfg, od_floor=cfg.thresholds.strong)
+    if cfg.compartment != "nuclear":
+        labels = refine_large(labels, chan)
     return drop_debris(labels)
+
+
+def refine_large(labels: np.ndarray, hema: np.ndarray, big: float = 2.5, min_count: int = 30) -> np.ndarray:
+    """Second-stage threshold inside unusually large objects.
+
+    A pale cell whose faintly blue cytoplasm clears the global nuclear
+    threshold comes out as one blob: nucleus + cytoplasm.  Inside each object
+    larger than `big` × the median, re-threshold hematoxylin with Otsu and
+    keep the largest dark core, if it is a plausible nucleus (≥ 15 % of the
+    blob and ≥ half the median area).  Genuinely large, evenly stained nuclei
+    have no dark core distinct from their rim and are left alone."""
+    n = int(labels.max())
+    if n < min_count:
+        return labels
+    areas = np.bincount(labels.ravel())
+    med = float(np.median(areas[1:]))
+    out = labels.copy()
+    for r in measure.regionprops(labels, intensity_image=hema):
+        if r.area <= big * med:
+            continue
+        sl = r.slice; m = labels[sl] == r.label; vals = hema[sl][m]
+        if vals.size < 20 or vals.max() - vals.min() < 0.04:
+            continue
+        try:
+            t = filters.threshold_otsu(vals)
+        except ValueError:
+            continue
+        core = measure.label(m & (hema[sl] > t))
+        if core.max() == 0:
+            continue
+        sizes = np.bincount(core.ravel()); sizes[0] = 0; k = int(sizes.argmax())
+        if sizes[k] < max(0.15 * r.area, 0.5 * med) or sizes[k] > 0.85 * r.area:
+            continue
+        keep = ndi.binary_fill_holes(core == k)
+        region = out[sl]; region[m & ~keep] = 0
+    return out
 
 
 def drop_debris(labels: np.ndarray, frac: float = 0.25, min_count: int = 30) -> np.ndarray:

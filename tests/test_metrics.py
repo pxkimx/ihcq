@@ -46,3 +46,12 @@ def test_wilson_interval():
     assert 0.12 < lo < 0.13 and 0.24 < hi < 0.26
     lo, hi = wilson(0, 40)
     assert lo == 0.0 and 0.08 < hi < 0.10
+
+
+def test_grouped_percentile_matches_numpy():
+    from ihcq.metrics import grouped_percentile
+    rng = np.random.default_rng(3)
+    lab = rng.integers(0, 6, (40, 40)); val = rng.random((40, 40))
+    got = grouped_percentile(lab, val, 5, 90)
+    exp = [np.percentile(val[lab == i], 90) for i in range(1, 6)]
+    assert np.allclose(got, exp)

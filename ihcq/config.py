@@ -54,6 +54,9 @@ class Config:
     ring_px: int = 3                              # ring width for membrane/cytoplasm compartments
     cell_statistic: str = "mean"                  # mean | median | p90 — how DAB is summarised per cell
     thresholds: Thresholds = field(default_factory=Thresholds)
+    tumour_only: bool = False                     # score only nuclei the DAB-free helper calls tumour-like
+    membrane_complete_frac: float = 0.8           # fraction of sectors stained to call a membrane complete
+    cell_expand_px: Optional[int] = None          # cell territory beyond the nucleus; None → 1.2 × nuclear radius
     pixel_positive_od: Optional[float] = None     # None → thresholds.weak
     # scale
     mpp: Optional[float] = None                   # microns per pixel, for area in µm² and density per mm²

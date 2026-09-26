@@ -20,6 +20,8 @@
     <a href="#sec-score">Score</a><a href="#sec-session">Session <em id="tab-count" hidden>0</em></a><a href="#sec-stats">Statistics</a><a href="#sec-calibrate">Calibrate</a><a href="#sec-help">Help</a>
   </nav>
   <div class="top-actions">
+    <label class="btn sm" title="Open a saved .ihcq project">Open…<input id="proj-open" type="file" accept=".ihcq,.zip" hidden></label>
+    <a class="btn sm" id="proj-save" href="/api/project/save" download title="Save every image, its settings, regions and group">Save project</a>
     <button class="icon" id="theme" title="Light / dark">◐</button>
     <button class="btn ghost" id="quit" title="Stop the local server">Quit</button>
   </div>

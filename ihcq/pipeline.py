@@ -28,6 +28,7 @@ class Result:
     white: np.ndarray
     config: Config
     qc: list = field(default_factory=list)
+    extra: dict = field(default_factory=dict)       # per-nucleus arrays indexed by original label - 1
 
 
 def _qc_flags(summary: dict, cfg: Config) -> list:
@@ -55,9 +56,62 @@ def _qc_flags(summary: dict, cfg: Config) -> list:
         flags.append(f"detected nuclei have median radius {r_est} px against an assumed {r_used} px — set --mpp or --radius")
     if summary.get("white_point_source") == "default":
         flags.append("no bare glass in the field — white point assumed (245); pass --white from a blank area of this slide")
+    if cfg.tumour_only and summary.get("tumour_separated") is False:
+        flags.append("tumour-only scoring requested but tumour and stroma nuclei did not separate — all cells were scored; draw a tumour ROI instead")
+    if cfg.compartment == "membrane" and summary.get("her2_score") and summary.get("scored_population") == "all cells":
+        flags.append("HER2 score is over all cells, stroma included — enable tumour-only scoring or draw a tumour ROI (ASCO/CAP scores tumour cells)")
     if cfg.profile_name == "default":
         flags.append("default intensity thresholds in use — calibrate before reporting")
     return flags
+
+
+def cell_annotations(labels, hema, dab, tissue, cfg: Config) -> dict:
+    """Per-nucleus arrays computed once on the full field: tumour likelihood
+    (always) and membrane sector peaks (membrane compartment)."""
+    from .tumour import tumour_probability
+    from .her2 import sector_profile
+    extra = {}
+    if labels.max() == 0:
+        return extra
+    p, info = tumour_probability(labels, hema)
+    extra["tumour_p"], extra["tumour_info"] = p, info
+    if cfg.compartment == "membrane":
+        expand = cfg.cell_expand_px or max(4, int(round(1.2 * assumed_radius(cfg))))
+        extra["peaks"], extra["has"] = sector_profile(labels, dab, tissue, expand)
+        extra["expand_px"] = expand
+    return extra
+
+
+def enrich_cells(cells: pd.DataFrame, extra: dict, ids: np.ndarray, cfg: Config) -> pd.DataFrame:
+    """Add tumour and membrane columns to a cell table whose rows are original label ids `ids`."""
+    if not len(cells) or not extra:
+        return cells
+    cells = cells.copy()
+    ids = np.asarray(ids, dtype=np.int64) - 1
+    if "tumour_p" in extra:
+        cells["tumour_p"] = np.round(extra["tumour_p"][ids], 3)
+        cells["tumour_like"] = cells["tumour_p"] > 0.5
+    if "peaks" in extra:
+        from .her2 import membrane_calls
+        comp, mod, cls = membrane_calls(extra["peaks"][ids], extra["has"][ids], cfg.thresholds, cfg.membrane_complete_frac)
+        cells["completeness"] = np.round(comp, 3); cells["membrane_od"] = np.round(mod, 3); cells["membrane_class"] = cls
+    return cells
+
+
+def score_cells(cells: pd.DataFrame, tissue_px: int, cfg: Config, extra: dict) -> dict:
+    """Cell-level summary over the chosen population, plus HER2 when membrane calls exist."""
+    info = extra.get("tumour_info", {})
+    use_tumour = cfg.tumour_only and "tumour_like" in cells and info.get("separated")
+    sub = cells[cells["tumour_like"]].reset_index(drop=True) if use_tumour else cells
+    out = cell_summary(sub, tissue_px, cfg.mpp)
+    out["scored_population"] = "tumour-like cells" if use_tumour else "all cells"
+    if "tumour_like" in cells and len(cells):
+        out["tumour_like_fraction"] = round(float(cells["tumour_like"].mean()), 3) if info.get("separated") else None
+        out["tumour_separated"] = bool(info.get("separated"))
+    if "membrane_class" in sub:
+        from .her2 import her2_summary
+        out.update(her2_summary(sub["completeness"].to_numpy(), sub["membrane_od"].to_numpy(), sub["membrane_class"].to_numpy(), cfg.thresholds))
+    return out
 
 
 def analyze(rgb: np.ndarray, cfg: Config | None = None) -> Result:
@@ -91,15 +145,21 @@ def analyze(rgb: np.ndarray, cfg: Config | None = None) -> Result:
     labels = np.zeros(rgb.shape[:2], dtype=np.int32)
     score_labels = labels
     cells = pd.DataFrame()
+    extra = {}
     if cfg.segment:
         labels = segment_nuclei(rgb, conc, tissue, cfg)
         score_labels = compartment_masks(labels, cfg.compartment, cfg.ring_px)
         cells = per_cell_table(labels, score_labels, dab, hema, cfg.thresholds, cfg.cell_statistic, cfg.mpp)
-        summary.update(cell_summary(cells, int(tissue.sum()), cfg.mpp))
+        extra = cell_annotations(labels, hema, dab, tissue, cfg)
+        cells = enrich_cells(cells, extra, np.arange(1, int(labels.max()) + 1), cfg)
+        summary.update(score_cells(cells, int(tissue.sum()), cfg, extra))
         # where does the chromogen actually sit?  Guides the compartment choice.
         pos_px = tissue & (dab >= (cfg.pixel_positive_od or cfg.thresholds.weak))
         summary["dab_in_nuclei_fraction"] = round(float((labels[pos_px] > 0).mean()), 3) if pos_px.any() else None
         est = _median_radius(labels)
+        if cfg.compartment != "nuclear":
+            from .nuclei import crosstalk_k
+            summary["hema_crosstalk_k"] = round(crosstalk_k(conc), 3)
         summary["assumed_nucleus_radius_px"] = assumed_radius(cfg)
         summary["median_nucleus_radius_px"] = round(est, 1) if est else None
         # nuclear morphology — meaningful on any hematoxylin-stained section, H&E included
@@ -119,7 +179,7 @@ def analyze(rgb: np.ndarray, cfg: Config | None = None) -> Result:
     # DAB-derived scores are only meaningful when the chromogen really is DAB
     summary["scores_valid"] = not (summary["second_stain"] == "eosin" or
                                    (summary["second_stain"] == "unknown" and (summary.get("dab_area_fraction_pct") or 0) > 2))
-    res = Result(summary, cells, conc, tissue, labels, score_labels, matrix, white, cfg)
+    res = Result(summary, cells, conc, tissue, labels, score_labels, matrix, white, cfg, extra=extra)
     res.qc = _qc_flags(summary, cfg)
     summary["qc_flags"] = " | ".join(res.qc)
     return res

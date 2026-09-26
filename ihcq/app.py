@@ -77,7 +77,7 @@ def _payload(rid: str, entry: dict, paths: dict) -> dict:
     res = entry["res"]
     cells = res.cells
     cell_list = cells[["x", "y", "area_px", "dab_od", "hema_od", "bin"]].round(3).values.tolist() if len(cells) else []
-    return {"id": rid, "summary": {"image": entry["name"], **res.summary}, "qc": res.qc,
+    return {"id": rid, "summary": {"image": entry["name"], "group": SESSION["groups"].get(rid, ""), **res.summary}, "qc": res.qc,
             "overlays": {k: f"/out/{v.name}" for k, v in paths.items()}, "original": f"/out/{entry['orig'].name}",
             "cells": cell_list, "thresholds": {"weak": res.config.thresholds.weak, "moderate": res.config.thresholds.moderate, "strong": res.config.thresholds.strong},
             "cells_csv": f"/out/{entry['cells_csv'].name}" if entry.get("cells_csv") else None,
@@ -90,6 +90,11 @@ def _record(rid: str, entry: dict, paths: dict | None = None):
         SESSION["assets"][rid] = {"images": {"original": str(entry["orig"]), **{k: str(v) for k, v in paths.items()}},
                                   "cells_csv": str(entry["cells_csv"]) if entry.get("cells_csv") else None}
     SESSION["assets"].setdefault(rid, {})["summary"] = row; SESSION["assets"][rid]["qc"] = entry["res"].qc
+    # replaying a result exactly needs the settings it was SEGMENTED with (base) and
+    # the cut points it is currently BINNED with — segmentation uses the weak cut
+    SESSION["assets"][rid]["config"] = (entry["base"]["config"] if "base" in entry else entry["res"].config).to_dict()
+    SESSION["assets"][rid]["thresholds"] = vars(entry["res"].config.thresholds).copy()
+    SESSION["assets"][rid]["roi"] = entry.get("roi", {"include": [], "exclude": []})
     with SESSION["lock"]:
         SESSION["rows"] = [r for r in SESSION["rows"] if r["id"] != rid] + [row]
         pd.DataFrame(SESSION["rows"]).drop(columns=["id"]).to_csv(OUT / "session_results.csv", index=False)
@@ -309,6 +314,59 @@ def _polys_mask(shape, polys) -> np.ndarray:
     return np.array(m, dtype=bool)
 
 
+PROJECT_VERSION = 1
+
+
+def _project_save() -> Path:
+    """Zip every image's original plus the exact settings, cut points, regions and group."""
+    import zipfile
+    out = OUT / f"IHCq_project_{time.strftime('%Y%m%d_%H%M')}.ihcq"
+    items = []
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for k, r in enumerate(SESSION["rows"]):
+            a = SESSION["assets"].get(r["id"], {})
+            orig = a.get("images", {}).get("original")
+            if not orig or not Path(orig).exists():
+                continue
+            arc = f"images/{k:03d}_{_safe(r['image'])}.png"
+            z.write(orig, arc)
+            items.append({"name": r["image"], "file": arc, "config": a.get("config"), "roi": a.get("roi", {"include": [], "exclude": []}),
+                          "thresholds": a.get("thresholds"), "group": r.get("group", ""), "summary_at_save": {x: r.get(x) for x in ("n_cells", "pct_positive", "h_score", "her2_score")}})
+        z.writestr("manifest.json", json.dumps({"format": "IHCq project", "version": PROJECT_VERSION, "saved": time.strftime("%Y-%m-%d %H:%M"), "images": items}, indent=2))
+    return out
+
+
+def _project_open(raw: bytes) -> dict:
+    import zipfile
+    from .io import _to_rgb8
+    z = zipfile.ZipFile(_io.BytesIO(raw))
+    try:
+        man = json.loads(z.read("manifest.json"))
+    except KeyError:
+        raise ValueError("not an IHCq project (no manifest.json)")
+    if man.get("format") != "IHCq project":
+        raise ValueError("not an IHCq project")
+    results, mismatches = [], []
+    for it in man.get("images", []):
+        with Image.open(_io.BytesIO(z.read(it["file"]))) as im:
+            rgb = _to_rgb8(np.array(im.convert("RGB")))
+        cfg = Config.from_dict(it["config"]) if it.get("config") else Config()
+        out = _score(rgb, cfg, it["name"])
+        rid = out["id"]
+        if it.get("group"):
+            SESSION["groups"][rid] = it["group"]
+        roi = it.get("roi") or {}
+        th = it.get("thresholds")
+        th = Thresholds(**th) if th and (th != vars(cfg.thresholds)) else None
+        if roi.get("include") or roi.get("exclude") or it.get("group") or th is not None:
+            out = _derive(_cached(rid), th=th, roi=roi)
+        was, now = it.get("summary_at_save", {}), out["summary"]
+        if was.get("h_score") is not None and now.get("h_score") is not None and abs(was["h_score"] - now["h_score"]) > 0.05:
+            mismatches.append(it["name"])
+        results.append(out)
+    return {"results": results, "saved": man.get("saved"), "mismatches": mismatches}
+
+
 def _calibrate(groups: dict) -> dict:
     from .calibrate import fit_from_cells
     od = {}
@@ -374,6 +432,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, {"error": f"{type(e).__name__}: {e}"})
             return self._file(p, "application/pdf", download=True)
+        if u.path == "/api/project/save":
+            if not SESSION["rows"]:
+                return self._send(400, {"error": "nothing scored yet"})
+            return self._file(_project_save(), "application/zip", download=True)
         if u.path == "/api/session":
             with SESSION["lock"]:
                 return self._send(200, {"rows": SESSION["rows"], "cached": list(SESSION["cache"].keys())})
@@ -398,6 +460,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/rebin":
                 th = Thresholds(float(q["weak"][0]), float(q["moderate"][0]), float(q["strong"][0])); th.validate()
                 return self._send(200, _rebin(q["id"][0], th))
+            if u.path == "/api/project/open":
+                return self._send(200, _project_open(raw))
             if u.path == "/api/regions":
                 body = json.loads(raw or b"{}")
                 return self._send(200, _regions(q["id"][0], body.get("include") or []))
