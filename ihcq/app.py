@@ -58,6 +58,7 @@ def _cfg_from_query(q: dict) -> Config:
         cfg.white_point = [float(v) for v in g("white").split(",")]
     if g("segment") == "0": cfg.segment = False
     if g("fit_stains") == "1": cfg.fit_stains = True
+    if g("tumour_only") == "1": cfg.tumour_only = True
     if g("dvec"):
         from .stains import STAIN_VECTORS
         dv = [float(v) for v in g("dvec").split(",")]
@@ -76,7 +77,13 @@ def _safe(stem: str) -> str:
 def _payload(rid: str, entry: dict, paths: dict) -> dict:
     res = entry["res"]
     cells = res.cells
-    cell_list = cells[["x", "y", "area_px", "dab_od", "hema_od", "bin"]].round(3).values.tolist() if len(cells) else []
+    cols = ["x", "y", "area_px", "dab_od", "hema_od", "bin"]
+    cell_list = cells[cols].round(3).values.tolist() if len(cells) else []
+    if len(cells):
+        tl = cells["tumour_like"].astype(int).tolist() if "tumour_like" in cells else [-1] * len(cells)
+        mc = cells["membrane_class"].astype(int).tolist() if "membrane_class" in cells else [-1] * len(cells)
+        cp = cells["completeness"].round(2).tolist() if "completeness" in cells else [None] * len(cells)
+        cell_list = [row + [a, b, c] for row, a, b, c in zip(cell_list, tl, mc, cp)]
     return {"id": rid, "summary": {"image": entry["name"], "group": SESSION["groups"].get(rid, ""), **res.summary}, "qc": res.qc,
             "overlays": {k: f"/out/{v.name}" for k, v in paths.items()}, "original": f"/out/{entry['orig'].name}",
             "cells": cell_list, "thresholds": {"weak": res.config.thresholds.weak, "moderate": res.config.thresholds.moderate, "strong": res.config.thresholds.strong},
@@ -95,6 +102,7 @@ def _record(rid: str, entry: dict, paths: dict | None = None):
     SESSION["assets"][rid]["config"] = (entry["base"]["config"] if "base" in entry else entry["res"].config).to_dict()
     SESSION["assets"][rid]["thresholds"] = vars(entry["res"].config.thresholds).copy()
     SESSION["assets"][rid]["roi"] = entry.get("roi", {"include": [], "exclude": []})
+    SESSION["assets"][rid]["clicks"] = entry.get("clicks"); SESSION["assets"][rid]["tumour_only"] = entry.get("tumour_only")
     with SESSION["lock"]:
         SESSION["rows"] = [r for r in SESSION["rows"] if r["id"] != rid] + [row]
         pd.DataFrame(SESSION["rows"]).drop(columns=["id"]).to_csv(OUT / "session_results.csv", index=False)
@@ -150,19 +158,28 @@ def _derive(entry: dict, th: Thresholds | None = None, roi: dict | None = None) 
     tissue = base["tissue"] & mask
     labels, score_labels = base["labels"], base["score_labels"]
     n = int(labels.max())
+    ids = np.arange(1, n + 1)
     if active and n:
         cy, cx = np.array(ndi.center_of_mass(labels > 0, labels, np.arange(1, n + 1))).T
         keep = mask[np.clip(np.round(cy).astype(int), 0, shape[0] - 1), np.clip(np.round(cx).astype(int), 0, shape[1] - 1)]
         lut = np.zeros(n + 1, np.int32)
         lut[1:][keep] = np.arange(1, int(keep.sum()) + 1)      # one map for nuclei AND their rings
         labels, score_labels = lut[labels], lut[score_labels]
+        ids = np.nonzero(keep)[0] + 1
     dab, hema = res.conc[..., 1], res.conc[..., 0]
     s = dict(base["summary"])
     s.update(pixel_summary(dab, hema, tissue, cfg.thresholds, cfg.pixel_positive_od, cfg.mpp))
     cells = pd.DataFrame()
+    if "tumour_only" in entry:
+        cfg.tumour_only = entry["tumour_only"]
     if cfg.segment:
+        from .pipeline import enrich_cells, score_cells
         cells = per_cell_table(labels, score_labels, dab, hema, cfg.thresholds, cfg.cell_statistic, cfg.mpp)
-        s.update(cell_summary(cells, int(tissue.sum()), cfg.mpp))
+        cells = enrich_cells(cells, res.extra, ids, cfg)
+        s.update(score_cells(cells, int(tissue.sum()), cfg, res.extra))
+        ti = res.extra.get("tumour_info", {})
+        s["tumour_classifier"] = ti.get("source", "automatic")
+        if ti.get("loo_accuracy") is not None: s["tumour_classifier_accuracy"] = ti["loo_accuracy"]
     s.update({"thr_weak": cfg.thresholds.weak, "thr_moderate": cfg.thresholds.moderate, "thr_strong": cfg.thresholds.strong, "profile": cfg.profile_name,
               "roi_fraction": round(float(tissue.sum() / max(base["tissue"].sum(), 1)), 4) if active else None,
               "roi_polygons": roi if active else None})
@@ -189,7 +206,10 @@ def _regions(rid: str, polys: list) -> dict:
     labels, score_labels = base["labels"], base["score_labels"]
     dab, hema = res.conc[..., 1], res.conc[..., 0]
     n = int(labels.max())
+    from .pipeline import enrich_cells, score_cells
     cells_all = per_cell_table(labels, score_labels, dab, hema, cfg.thresholds, cfg.cell_statistic, cfg.mpp) if cfg.segment and n else pd.DataFrame()
+    if len(cells_all): cells_all = enrich_cells(cells_all, res.extra, np.arange(1, n + 1), cfg)
+    cfg = Config.from_dict(cfg.to_dict()); cfg.tumour_only = entry.get("tumour_only", cfg.tumour_only)
     out = []
     for i, poly in enumerate(polys or [], 1):
         m = _polys_mask(shape, [poly]); t = base["tissue"] & m
@@ -199,8 +219,8 @@ def _regions(rid: str, polys: list) -> dict:
         if len(cells_all):
             yi = cells_all["y"].round().astype(int).clip(0, shape[0] - 1).to_numpy(); xi = cells_all["x"].round().astype(int).clip(0, shape[1] - 1).to_numpy()
             c = cells_all[m[yi, xi]]
-            cs = cell_summary(c.reset_index(drop=True), int(t.sum()), cfg.mpp)
-            row.update({k: cs.get(k) for k in ("n_cells", "pct_positive", "pct_positive_ci95", "h_score", "allred_total", "irs", "pct_3plus", "cells_per_mm2", "positive_cells_per_mm2", "cells_per_tissue_px1e4")})
+            cs = score_cells(c.reset_index(drop=True), int(t.sum()), cfg, res.extra)
+            row.update({k: cs.get(k) for k in ("n_cells", "pct_positive", "pct_positive_ci95", "h_score", "allred_total", "irs", "pct_3plus", "cells_per_mm2", "positive_cells_per_mm2", "cells_per_tissue_px1e4", "her2_score", "pct_complete_any", "scored_population")})
         out.append(row)
     # two-region comparison of positivity: Fisher exact on positive/negative counts
     test = None
@@ -210,6 +230,36 @@ def _regions(rid: str, polys: list) -> dict:
         tab = [[a[0], out[0]["n_cells"] - a[0]], [a[1], out[1]["n_cells"] - a[1]]]
         test = {"test": "Fisher exact, positive vs negative cells", "p": float(fisher_exact(tab)[1])}
     return {"regions": out, "test": test}
+
+
+def _classify(rid: str, tumour_pts: list, stroma_pts: list, tumour_only: bool = True) -> dict:
+    """Per-image tumour/stroma classifier trained on clicked nuclei (QuPath-style object classifier)."""
+    from scipy import ndimage as ndi
+    from .tumour import rich_features, fit_clicks
+    entry = _cached(rid); res, base = entry["res"], entry["base"]
+    labels = base["labels"]; n = int(labels.max())
+    if n < 10:
+        raise ValueError("too few nuclei in this image to classify")
+    if "features" not in base:
+        base["features"] = rich_features(labels, res.conc[..., 0], base["tissue"])
+    cy, cx = np.array(ndi.center_of_mass(labels > 0, labels, np.arange(1, n + 1))).T
+    from scipy.spatial import cKDTree
+    tree = cKDTree(np.column_stack([cx, cy]))
+    rad = max(8.0, 3 * float(np.sqrt(np.median(np.bincount(labels.ravel())[1:]) / np.pi)))
+    def nearest(pts):
+        idx = []
+        for x, y in pts:
+            d, i = tree.query([float(x), float(y)])
+            if d <= rad and i not in idx: idx.append(int(i))
+        return idx
+    ti, si = nearest(tumour_pts), nearest(stroma_pts)
+    p, info = fit_clicks(base["features"], ti, si)
+    res.extra["tumour_p"], res.extra["tumour_info"] = p, info
+    entry["tumour_only"] = bool(tumour_only)
+    entry["clicks"] = {"tumour": tumour_pts, "stroma": stroma_pts}
+    out = _derive(entry)
+    out["classifier"] = {**info, "clicks_matched": [len(ti), len(si)], "clicks_given": [len(tumour_pts), len(stroma_pts)]}
+    return out
 
 
 def _cached(rid: str) -> dict:
@@ -331,6 +381,7 @@ def _project_save() -> Path:
             arc = f"images/{k:03d}_{_safe(r['image'])}.png"
             z.write(orig, arc)
             items.append({"name": r["image"], "file": arc, "config": a.get("config"), "roi": a.get("roi", {"include": [], "exclude": []}),
+                          "clicks": a.get("clicks"), "tumour_only": a.get("tumour_only"),
                           "thresholds": a.get("thresholds"), "group": r.get("group", ""), "summary_at_save": {x: r.get(x) for x in ("n_cells", "pct_positive", "h_score", "her2_score")}})
         z.writestr("manifest.json", json.dumps({"format": "IHCq project", "version": PROJECT_VERSION, "saved": time.strftime("%Y-%m-%d %H:%M"), "images": items}, indent=2))
     return out
@@ -360,6 +411,10 @@ def _project_open(raw: bytes) -> dict:
         th = Thresholds(**th) if th and (th != vars(cfg.thresholds)) else None
         if roi.get("include") or roi.get("exclude") or it.get("group") or th is not None:
             out = _derive(_cached(rid), th=th, roi=roi)
+        if it.get("clicks"):
+            out = _classify(rid, it["clicks"]["tumour"], it["clicks"]["stroma"], bool(it.get("tumour_only", True)))
+        elif it.get("tumour_only") is not None:
+            e = _cached(rid); e["tumour_only"] = bool(it["tumour_only"]); out = _derive(e)
         was, now = it.get("summary_at_save", {}), out["summary"]
         if was.get("h_score") is not None and now.get("h_score") is not None and abs(was["h_score"] - now["h_score"]) > 0.05:
             mismatches.append(it["name"])
@@ -462,6 +517,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, _rebin(q["id"][0], th))
             if u.path == "/api/project/open":
                 return self._send(200, _project_open(raw))
+            if u.path == "/api/classify":
+                body = json.loads(raw or b"{}")
+                return self._send(200, _classify(q["id"][0], body.get("tumour") or [], body.get("stroma") or [], bool(body.get("tumour_only", True))))
+            if u.path == "/api/tumour_only":
+                e = _cached(q["id"][0]); e["tumour_only"] = (q.get("on") or ["1"])[0] == "1"
+                return self._send(200, _derive(e))
             if u.path == "/api/regions":
                 body = json.loads(raw or b"{}")
                 return self._send(200, _regions(q["id"][0], body.get("include") or []))

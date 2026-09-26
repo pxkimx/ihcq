@@ -76,6 +76,7 @@
         <label>Per-cell statistic</label>
         <select id="statistic"><option value="mean">Mean DAB OD</option><option value="median">Median</option><option value="p90">90th percentile (membrane / punctate)</option></select>
         <label class="check"><input id="segment" type="checkbox" checked> Find nuclei (uncheck for pixel metrics only)</label>
+        <label class="check"><input id="tumour_only" type="checkbox"> Score tumour cells only — uses the classifier (teach it with a few clicks in the viewer); ASCO/CAP scores tumour cells</label>
         <label class="check"><input id="fit_stains" type="checkbox"> Fit stain vectors per image (Macenko) — only if brown leaks into the hematoxylin panel; it changes the OD scale, so recalibrate cut points</label>
       </details>
       <details class="adv">
@@ -147,6 +148,7 @@
               <button data-layer="cells" aria-pressed="true">Cells by bin</button>
               <button data-layer="positivity">Positivity</button>
               <button data-layer="heat">Density heat</button>
+              <button data-layer="tumour">Tumour map</button>
             </div>
             <input id="opacity" type="range" min="0" max="100" value="100" title="overlay opacity">
             <div class="seg" id="roi-tools">
@@ -156,6 +158,10 @@
             </div>
             <button class="btn primary sm" id="roi-apply" disabled>Score inside ROI</button>
             <button class="btn sm" id="roi-compare" disabled title="Score each ＋ ROI on its own">Compare regions</button>
+            <div class="seg" id="teach" title="Click cells to teach the tumour/stroma classifier">
+              <button data-teach="tumour">Teach tumour</button><button data-teach="stroma">Teach stroma</button>
+            </div>
+            <button class="btn sm" id="classify" disabled>Classify <span id="click-count" class="mut"></span></button>
           </div>
           <div class="viewer" id="viewer">
             <canvas id="cv"></canvas>
@@ -195,7 +201,7 @@
               </div>
             </div>
             <div class="celltable tw"><table id="ctab"><thead><tr>
-              <th data-c="i" class="n">#</th><th data-c="bin">bin</th><th data-c="dab" class="n">DAB OD</th><th data-c="hema" class="n">hema OD</th><th data-c="area" class="n">area px</th><th data-c="x" class="n">x</th><th data-c="y" class="n">y</th>
+              <th data-c="i" class="n">#</th><th data-c="bin">bin</th><th data-c="dab" class="n">DAB OD</th><th data-c="hema" class="n">hema OD</th><th data-c="area" class="n">area px</th><th data-c="tum">tumour</th><th data-c="mem">membrane</th><th data-c="x" class="n">x</th><th data-c="y" class="n">y</th>
             </tr></thead><tbody></tbody></table></div>
             <p class="mut" style="margin:6px 0 0">Click a row to fly the viewer to that nucleus.</p>
           </div>

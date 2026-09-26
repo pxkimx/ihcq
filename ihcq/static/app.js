@@ -5,7 +5,7 @@ const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [..
 const BIN = ["--b0", "--b1", "--b2", "--b3"], BINNAME = ["0", "1+", "2+", "3+"];
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : (typeof v === "number" ? v.toFixed(d) : String(v));
-const state = { pick: null, custom: { white: null, hema: null, dab: null }, csort: { c: "dab", dir: -1 }, cfilter: "all", rois: {}, tool: null, drawing: null, heat: null, results: {}, order: [], cur: null, th: { weak: .15, moderate: .40, strong: .80 }, layer: "cells", zoom: 1, pan: { x: 0, y: 0 }, imgs: {}, hover: null, sort: { k: "image", dir: 1 } };
+const state = { teach: null, clicks: {}, pick: null, custom: { white: null, hema: null, dab: null }, csort: { c: "dab", dir: -1 }, cfilter: "all", rois: {}, tool: null, drawing: null, heat: null, results: {}, order: [], cur: null, th: { weak: .15, moderate: .40, strong: .80 }, layer: "cells", zoom: 1, pan: { x: 0, y: 0 }, imgs: {}, hover: null, sort: { k: "image", dir: 1 } };
 
 /* ---------- theme ---------- */
 try { const t = localStorage.getItem("ihcq-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -28,7 +28,7 @@ const PRESETS = {
   pixels: { compartment: "nuclear", statistic: "mean", weak: .15, moderate: .40, strong: .80, segment: false, ring: 3 },
 };
 $("#preset").onchange = e => { const p = PRESETS[e.target.value]; for (const k of ["compartment", "statistic"]) $("#" + k).value = p[k]; for (const k of ["weak", "moderate", "strong", "ring"]) $("#" + k).value = p[k]; $("#segment").checked = p.segment; syncTh(); };
-function settingsQuery(name) { const p = new URLSearchParams(); for (const k of ["compartment", "backend", "statistic", "mpp", "radius", "ring", "weak", "moderate", "strong"]) { const v = $("#" + k).value; if (v !== "") p.set(k, v); } if (!$("#segment").checked) p.set("segment", "0"); if ($("#fit_stains").checked) p.set("fit_stains", "1"); const C = state.custom; if (C.white) p.set("white", C.white.join(",")); if (C.hema) p.set("hvec", C.hema.join(",")); if (C.dab) p.set("dvec", C.dab.join(",")); if (name) p.set("name", name); return p.toString(); }
+function settingsQuery(name) { const p = new URLSearchParams(); for (const k of ["compartment", "backend", "statistic", "mpp", "radius", "ring", "weak", "moderate", "strong"]) { const v = $("#" + k).value; if (v !== "") p.set(k, v); } if (!$("#segment").checked) p.set("segment", "0"); if ($("#fit_stains").checked) p.set("fit_stains", "1"); if ($("#tumour_only").checked) p.set("tumour_only", "1"); const C = state.custom; if (C.white) p.set("white", C.white.join(",")); if (C.hema) p.set("hvec", C.hema.join(",")); if (C.dab) p.set("dvec", C.dab.join(",")); if (name) p.set("name", name); return p.toString(); }
 function syncTh() { state.th = { weak: +$("#weak").value, moderate: +$("#moderate").value, strong: +$("#strong").value }; if (state.cur) { drawHist(); live(); } }
 ["weak", "moderate", "strong"].forEach(k => $("#" + k).oninput = syncTh);
 $("#save-profile").onclick = () => { const cfg = { compartment: $("#compartment").value, cell_statistic: $("#statistic").value, backend: $("#backend").value, ring_px: +$("#ring").value || 3, mpp: $("#mpp").value ? +$("#mpp").value : null, nucleus_radius_px: $("#radius").value ? +$("#radius").value : null, segment: $("#segment").checked, thresholds: { weak: +$("#weak").value, moderate: +$("#moderate").value, strong: +$("#strong").value }, profile_name: "app-profile",
@@ -82,6 +82,20 @@ function finishPick(ix, iy) { const rgb = sampleRGB(ix, iy), k = state.pick;
 $("#vec-reset").onclick = () => { state.custom = { white: null, hema: null, dab: null }; renderVecs(); markDirty(); toast("Back to textbook vectors and automatic white point"); };
 function markDirty() { if (state.cur) { const b = $("#reanalyze"); b.textContent = "Re-analyze current image with these settings ↻"; } }
 
+/* ---------- teach the tumour/stroma classifier ---------- */
+function updateClickCount() { const K = state.clicks[state.cur] || { tumour: [], stroma: [] }; $("#click-count").textContent = `${K.tumour.length} / ${K.stroma.length}`; $("#classify").disabled = K.tumour.length < 3 || K.stroma.length < 3; }
+$$("#teach button").forEach(b => b.onclick = () => { if (!state.cur) return; state.teach = state.teach === b.dataset.teach ? null : b.dataset.teach; state.tool = null; state.pick = null;
+  $$("#teach button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.teach === state.teach))); $$("#roi-tools button,#pickers button").forEach(x => x.setAttribute("aria-pressed", "false"));
+  const h = $("#picker-hint"); h.hidden = !state.teach; h.textContent = state.teach ? `Click ${state.teach === "tumour" ? "tumour" : "stromal"} nuclei — at least 3 of each, 10+ is better` : ""; viewer.style.cursor = state.teach ? "crosshair" : "grab"; if (state.teach && state.layer !== "tumour") setLayer("tumour"); });
+$("#classify").onclick = async () => { const j = state.results[state.cur]; const K = state.clicks[state.cur]; const b = $("#classify"); b.disabled = true;
+  try { const r = await fetch(`/api/classify?id=${j.id}`, { method: "POST", body: JSON.stringify({ ...K, tumour_only: true }) }); const nj = await r.json(); if (!r.ok) throw new Error(nj.error);
+    nj.truth = j.truth; nj.note = j.note; state.clicks[nj.id] = K; add(nj); $("#tumour_only").checked = true; await show(nj.id); setLayer("tumour");
+    const c = nj.classifier; toast(`Classifier trained on ${c.clicks_matched[0]} + ${c.clicks_matched[1]} clicks · leave-one-out accuracy ${Math.round(c.loo_accuracy * 100)}% · ${Math.round(c.tumour_fraction * 100)}% of nuclei tumour-like${c.loo_accuracy < 0.8 ? " — add more clicks" : ""}`, c.loo_accuracy < 0.7); }
+  catch (err) { toast(err.message, true); } finally { updateClickCount(); } };
+$("#tumour_only").addEventListener("change", async e => { const j = state.results[state.cur]; if (!j) return;
+  try { const r = await fetch(`/api/tumour_only?id=${j.id}&on=${e.target.checked ? 1 : 0}`, { method: "POST" }); const nj = await r.json(); if (!r.ok) throw new Error(nj.error); nj.truth = j.truth; nj.note = j.note; add(nj); await show(nj.id);
+    toast(e.target.checked ? (nj.summary.scored_population === "tumour-like cells" ? "Scoring tumour-like cells only" : "Tumour and stroma did not separate automatically — teach the classifier with a few clicks") : "Scoring all cells"); } catch (err) { toast(err.message, true); } });
+
 /* ---------- projects ---------- */
 $("#proj-save").addEventListener("click", e => { if (!state.order.length) { e.preventDefault(); toast("Score an image first — there is nothing to save", true); } else toast("Saving project — originals, settings, regions and groups"); });
 $("#proj-open").onchange = async e => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; toast(`Opening ${f.name} — re-analyzing every image…`);
@@ -126,7 +140,7 @@ async function show(id) {
 
   $("#dl-cells").href = j.cells_csv || "#"; $("#dl-cells").style.visibility = j.cells_csv ? "visible" : "hidden";
   $("#truth").textContent = j.truth ? `Synthetic field — truth: H = ${j.truth.h_score}, ${j.truth.pct_positive}% positive, ${j.truth.n_cells} nuclei.` : (j.note || "");
-  $("#regions").hidden = true;
+  $("#regions").hidden = true; updateClickCount();
   $("#group").value = s.group || ""; $("#reanalyze").disabled = false; $("#apply-all").disabled = false;
   $("#dl-orig").href = j.original; $("#dl-orig").download = s.image + "_original.png";
   $("#dl-cells-img").href = j.overlays.cells || "#"; $("#dl-cells-img").download = s.image + "_labelled_nuclei.png";
@@ -139,6 +153,7 @@ function renderTiles(s) {
   const seg = s.n_cells !== undefined && s.n_cells !== null;
   const hcol = `var(${BIN[Math.min(3, Math.floor((s.h_score || 0) / 100) + 1)]})`;
   $("#tiles").innerHTML =
+    (s.her2_score ? tile(s.her2_score, "HER2 (ASCO/CAP)", `${(s.her2_category || "").split(" (")[0].split(" ·")[0]} · complete ${fmt(s.pct_complete_any)}% · strong ${fmt(s.pct_complete_strong)}%`, `var(${BIN[{ "0": 0, "1+": 1, "2+": 2, "3+": 3 }[s.her2_score] || 0]})`) : "") +
     (seg ? tile(fmt(s.h_score, 0), "H-score", "0 – 300", hcol) : "") +
     (seg ? tile(fmt(s.pct_positive) + "%", "positive cells", s.pct_positive_ci95 ? `95% CI ${s.pct_positive_ci95[0]}–${s.pct_positive_ci95[1]} · n ${s.n_cells}` : `${s.n_cells} nuclei`, "var(--b2)") : "") +
     (seg ? tile(fmt(s.pct_3plus) + "%", "3+ cells", `2+ ${fmt(s.pct_2plus)}% · 1+ ${fmt(s.pct_1plus)}%`, "var(--b3)") : "") +
@@ -154,6 +169,9 @@ function renderTiles(s) {
   kv.push(`pixel H <b>${fmt(s.pixel_h_score, 0)}</b>`); kv.push(`integrated DAB OD <b>${fmt(s.integrated_dab_od, 0)}</b>`);
   if (s.stain_vectors_used) kv.push(`DAB vector <b>${s.stain_vectors_used[1].map(v => v.toFixed(2)).join(" ")}</b>`);
   if (s.roi_fraction != null) kv.push(`ROI <b>${fmt(s.roi_fraction * 100, 0)}%</b> of tissue`);
+  if (s.scored_population) kv.push(`scored <b>${s.scored_population}</b>${s.tumour_classifier === "clicks" ? ` (taught · click accuracy ${fmt((s.tumour_classifier_accuracy || 0) * 100, 0)}%)` : ""}`);
+  if (s.tumour_like_fraction != null) kv.push(`tumour-like <b>${fmt(s.tumour_like_fraction * 100, 0)}%</b> of nuclei`);
+  if (s.hema_crosstalk_k) kv.push(`DAB→hema leak corrected <b>${s.hema_crosstalk_k}</b>`);
   $("#kvs").innerHTML = kv.map(x => `<span>${x}</span>`).join("");
 }
 function renderQC(flags) { $("#qc").innerHTML = (flags || []).map(f => `<div class="${/NOT meaningful|not valid/i.test(f) ? "bad" : ""}">${f}</div>`).join(""); }
@@ -173,7 +191,10 @@ function drawViewer() {
   ctx.setTransform(sc, 0, 0, sc, state.pan.x, state.pan.y);
   ctx.drawImage(im, 0, 0);
   if (state.layer === "heat") { ctx.globalAlpha = $("#opacity").value / 100; const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = true; ctx.drawImage(heatCanvas(), 0, 0, im.width, im.height); ctx.imageSmoothingEnabled = sm; ctx.globalAlpha = 1; }
-  else if (state.layer !== "original") { ctx.globalAlpha = $("#opacity").value / 100; const ov = state.imgs[state.layer]; ctx.drawImage(ov, 0, state.imgs.cap, im.width, im.height, 0, 0, im.width, im.height); ctx.globalAlpha = 1; }
+  else if (state.imgs[state.layer]) { ctx.globalAlpha = $("#opacity").value / 100; const ov = state.imgs[state.layer]; ctx.drawImage(ov, 0, state.imgs.cap, im.width, im.height, 0, 0, im.width, im.height); ctx.globalAlpha = 1; }
+  if (state.layer === "tumour") { const j0 = state.results[state.cur]; ctx.lineWidth = 2 / sc;
+    for (const c of j0.cells) { if (c[6] < 0) continue; const r = Math.sqrt(c[2] / Math.PI) + 2; ctx.beginPath(); ctx.arc(c[0], c[1], r, 0, 7); ctx.strokeStyle = c[6] ? "#30d158" : "rgba(160,160,170,.7)"; ctx.stroke(); } }
+  const K = state.clicks[state.cur]; if (K) { for (const [k, col] of [["tumour", "#30d158"], ["stroma", "#8e8e93"]]) for (const [x, y] of K[k]) { ctx.beginPath(); ctx.arc(x, y, 6 / sc, 0, 7); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 2 / sc; ctx.strokeStyle = "#fff"; ctx.stroke(); } }
   // ROI polygons
   const R = state.rois[state.cur] || { include: [], exclude: [] };
   const poly = (pts, col, dash, close) => { if (pts.length < 1) return; ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); if (close) ctx.closePath(); ctx.lineWidth = 2.5 / sc; ctx.strokeStyle = col; ctx.setLineDash(dash ? [8 / sc, 5 / sc] : []); ctx.stroke(); ctx.setLineDash([]); if (close) { ctx.fillStyle = col; ctx.globalAlpha = .10; ctx.fill(); ctx.globalAlpha = 1; } pts.forEach(p => { ctx.beginPath(); ctx.arc(p[0], p[1], 3.5 / sc, 0, 7); ctx.fillStyle = col; ctx.fill(); }); };
@@ -200,7 +221,7 @@ function heatCanvas() {
 /* ROI tools */
 $$("#roi-tools button").forEach(b => b.onclick = () => { const t = b.dataset.tool; if (t === "clear") { state.rois[state.cur] = { include: [], exclude: [] }; state.drawing = null; state.tool = null; $$("#roi-tools button").forEach(x => x.setAttribute("aria-pressed", "false")); $("#roi-apply").disabled = false; $("#roi-apply").textContent = "Score full field"; drawViewer(); return; } state.tool = state.tool === t ? null : t; state.drawing = null; $$("#roi-tools button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.tool === state.tool))); viewer.style.cursor = state.tool ? "crosshair" : "grab"; });
 function imgPoint(e) { const r = cv.getBoundingClientRect(); const sc = state.base * state.zoom; return [((e.clientX - r.left) * devicePixelRatio - state.pan.x) / sc, ((e.clientY - r.top) * devicePixelRatio - state.pan.y) / sc]; }
-viewer.addEventListener("click", e => { if (e.target.closest(".vfloat")) return; if (state.pick && state.cur) { const p = imgPoint(e); return finishPick(p[0], p[1]); } if (!state.tool || !state.cur) return; const p = imgPoint(e); if (!state.drawing) state.drawing = { tool: state.tool, pts: [] }; state.drawing.pts.push([Math.round(p[0]), Math.round(p[1])]); drawViewer(); });
+viewer.addEventListener("click", e => { if (e.target.closest(".vfloat")) return; if (state.teach && state.cur) { const p = imgPoint(e); const K = state.clicks[state.cur] = state.clicks[state.cur] || { tumour: [], stroma: [] }; K[state.teach].push([Math.round(p[0]), Math.round(p[1])]); updateClickCount(); return drawViewer(); } if (state.pick && state.cur) { const p = imgPoint(e); return finishPick(p[0], p[1]); } if (!state.tool || !state.cur) return; const p = imgPoint(e); if (!state.drawing) state.drawing = { tool: state.tool, pts: [] }; state.drawing.pts.push([Math.round(p[0]), Math.round(p[1])]); drawViewer(); });
 viewer.addEventListener("dblclick", e => { if (!state.drawing) return; e.preventDefault(); const d = state.drawing; state.drawing = null; if (d.pts.length >= 3) { const R = state.rois[state.cur] = state.rois[state.cur] || { include: [], exclude: [] }; R[d.tool].push(d.pts.slice(0, -1)); $("#roi-apply").disabled = false; $("#roi-apply").textContent = "Score inside ROI"; toast(`${d.tool === "include" ? "ROI" : "Exclusion"} closed — ${d.pts.length - 1} points`); } drawViewer(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape" && state.drawing) { state.drawing = null; drawViewer(); } });
 $("#roi-apply").onclick = async () => { const j = state.results[state.cur]; if (!j) return; const R = state.rois[state.cur] || { include: [], exclude: [] }; const b = $("#roi-apply"); b.disabled = true; b.textContent = "Scoring…";
@@ -217,14 +238,14 @@ $$("#layers button").forEach(b => b.onclick = () => setLayer(b.dataset.layer));
 function setLayer(l) { state.layer = l; $$("#layers button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.layer === l))); drawViewer(); }
 $("#opacity").oninput = drawViewer; $("#fit").onclick = () => { fitView(); drawViewer(); };
 viewer.addEventListener("wheel", e => { e.preventDefault(); const r = cv.getBoundingClientRect(); const mx = (e.clientX - r.left) * devicePixelRatio, my = (e.clientY - r.top) * devicePixelRatio; const f = Math.exp(-e.deltaY * 0.0015); const nz = Math.min(12, Math.max(1, state.zoom * f)); const k = nz / state.zoom; state.pan.x = mx - (mx - state.pan.x) * k; state.pan.y = my - (my - state.pan.y) * k; state.zoom = nz; if (nz === 1) fitView(); drawViewer(); }, { passive: false });
-let drag = null; viewer.addEventListener("pointerdown", e => { if (state.tool || state.pick || e.target.closest(".vfloat")) return; drag = { x: e.clientX, y: e.clientY, px: state.pan.x, py: state.pan.y }; viewer.setPointerCapture(e.pointerId); });
+let drag = null; viewer.addEventListener("pointerdown", e => { if (state.tool || state.pick || state.teach || e.target.closest(".vfloat")) return; drag = { x: e.clientX, y: e.clientY, px: state.pan.x, py: state.pan.y }; viewer.setPointerCapture(e.pointerId); });
 viewer.addEventListener("pointerup", () => drag = null);
 viewer.addEventListener("pointermove", e => {
   if (drag) { state.pan.x = drag.px + (e.clientX - drag.x) * devicePixelRatio; state.pan.y = drag.py + (e.clientY - drag.y) * devicePixelRatio; drawViewer(); return; }
   const j = state.results[state.cur]; if (!j || !j.cells.length) return;
   const r = cv.getBoundingClientRect(); const sc = state.base * state.zoom; const ix = ((e.clientX - r.left) * devicePixelRatio - state.pan.x) / sc, iy = ((e.clientY - r.top) * devicePixelRatio - state.pan.y) / sc;
   let best = null, bd = 1e9; for (const c of j.cells) { const d = (c[0] - ix) ** 2 + (c[1] - iy) ** 2; if (d < bd) { bd = d; best = c; } }
-  if (best && bd < Math.max(64, best[2])) { const b = binOf(best[3]); state.hover = best; tip.hidden = false; tip.style.left = (e.clientX - r.left) + "px"; tip.style.top = (e.clientY - r.top) + "px"; tip.innerHTML = `<i style="background:var(${BIN[b]})"></i>${BINNAME[b]} · DAB ${best[3].toFixed(3)} · hema ${best[4].toFixed(2)} · ${best[2]} px`; }
+  if (best && bd < Math.max(64, best[2])) { const b = binOf(best[3]); state.hover = best; tip.hidden = false; tip.style.left = (e.clientX - r.left) + "px"; tip.style.top = (e.clientY - r.top) + "px"; tip.innerHTML = `<i style="background:var(${BIN[b]})"></i>${BINNAME[b]} · DAB ${best[3].toFixed(3)} · hema ${best[4].toFixed(2)} · ${best[2]} px${best[7] >= 0 ? ` · membrane ${["none", "incomplete", "complete"][best[7]]}${best[8] != null ? " " + Math.round(best[8] * 100) + "%" : ""}` : ""}${best[6] >= 0 ? ` · ${best[6] ? "tumour" : "stroma"}` : ""}`; }
   else { state.hover = null; tip.hidden = true; }
   drawViewer();
 });
@@ -234,13 +255,13 @@ new ResizeObserver(() => { if (state.cur) { fitView(); drawViewer(); } }).observ
 /* ---------- per-cell table linked to the viewer ---------- */
 function renderCells() {
   const j = state.results[state.cur]; const tb = $("#ctab tbody"); if (!j) return;
-  let rows = j.cells.map((c, i) => ({ i: i + 1, x: c[0], y: c[1], area: c[2], dab: c[3], hema: c[4], bin: binOf(c[3]), ref: c }));
+  let rows = j.cells.map((c, i) => ({ i: i + 1, x: c[0], y: c[1], area: c[2], dab: c[3], hema: c[4], bin: binOf(c[3]), tum: c[6], mem: c[8] == null ? -1 : c[8], memc: c[7], ref: c }));
   const nAll = rows.length;
   if (state.cfilter !== "all") rows = rows.filter(r => r.bin === +state.cfilter);
   const { c, dir } = state.csort; rows.sort((a, b) => (a[c] > b[c] ? 1 : a[c] < b[c] ? -1 : 0) * dir);
   const LIMIT = 600; const shown = rows.slice(0, LIMIT);
   $("#cell-count").textContent = `${rows.length}${rows.length !== nAll ? " of " + nAll : ""}${rows.length > LIMIT ? " · first " + LIMIT + " shown" : ""}`;
-  tb.innerHTML = shown.map(r => `<tr data-x="${r.x}" data-y="${r.y}"><td class="n">${r.i}</td><td><span class="bdot" style="background:var(${BIN[r.bin]})"></span>${BINNAME[r.bin]}</td><td class="n">${r.dab.toFixed(3)}</td><td class="n">${r.hema.toFixed(3)}</td><td class="n">${r.area}</td><td class="n">${r.x.toFixed(0)}</td><td class="n">${r.y.toFixed(0)}</td></tr>`).join("");
+  tb.innerHTML = shown.map(r => `<tr data-x="${r.x}" data-y="${r.y}"><td class="n">${r.i}</td><td><span class="bdot" style="background:var(${BIN[r.bin]})"></span>${BINNAME[r.bin]}</td><td class="n">${r.dab.toFixed(3)}</td><td class="n">${r.hema.toFixed(3)}</td><td class="n">${r.area}</td><td>${r.tum === 1 ? "tumour" : r.tum === 0 ? '<span class="mut">stroma</span>' : "—"}</td><td>${r.memc >= 0 ? ["none", "incomplete", "complete"][r.memc] + (r.mem >= 0 ? ` <span class="mut">${Math.round(r.mem * 100)}%</span>` : "") : "—"}</td><td class="n">${r.x.toFixed(0)}</td><td class="n">${r.y.toFixed(0)}</td></tr>`).join("");
   $$("#ctab th").forEach(th => th.classList.toggle("sorted", th.dataset.c === c));
 }
 $$("#ctab th").forEach(th => th.onclick = () => { const c = th.dataset.c; state.csort = { c, dir: state.csort.c === c ? -state.csort.dir : (c === "i" || c === "x" || c === "y" ? 1 : -1) }; renderCells(); });

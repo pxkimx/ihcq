@@ -66,3 +66,53 @@ def tumour_probability(labels: np.ndarray, hema: np.ndarray, seed: int = 0) -> t
     if not ok:
         p = np.full(n, 0.5)
     return p, {"separated": ok, "tumour_fraction": round(frac, 3), "separation": round(sep, 2)}
+
+
+def rich_features(labels: np.ndarray, hema: np.ndarray, tissue: np.ndarray, reach: int = 30) -> np.ndarray:
+    """Nucleus features + cell-territory size + hematoxylin texture (still no DAB)."""
+    base = nucleus_features(labels, hema)
+    n = int(labels.max())
+    if n == 0:
+        return np.zeros((0, 7))
+    dist, (iy, ix) = ndi.distance_transform_edt(labels == 0, return_indices=True)
+    terr = np.where((dist <= reach) & tissue, labels[iy, ix], 0)
+    tarea = np.bincount(terr.ravel(), minlength=n + 1)[1:]
+    m = labels > 0
+    s1 = np.bincount(labels[m], weights=hema[m], minlength=n + 1)[1:]
+    s2 = np.bincount(labels[m], weights=hema[m] ** 2, minlength=n + 1)[1:]
+    cnt = np.maximum(np.bincount(labels[m], minlength=n + 1)[1:], 1)
+    hstd = np.sqrt(np.maximum(s2 / cnt - (s1 / cnt) ** 2, 0))
+    return np.column_stack([base, np.log1p(tarea), hstd])
+
+
+def fit_clicks(X: np.ndarray, tumour_idx, stroma_idx) -> tuple[np.ndarray, dict]:
+    """Fisher LDA trained on clicked nuclei; returns p_tumour for every nucleus.
+
+    Features are standardised on the whole field; the covariance is shrunk so
+    a dozen clicks are enough.  Cross-validated accuracy on the clicks is
+    reported so the user can see whether the two classes really separate."""
+    t, s_ = np.asarray(tumour_idx, int), np.asarray(stroma_idx, int)
+    if len(t) < 3 or len(s_) < 3:
+        raise ValueError("click at least 3 tumour and 3 stromal nuclei")
+    mu, sd = X.mean(0), X.std(0) + 1e-9
+    Z = (X - mu) / sd
+
+    def train(ti, si):
+        m1, m0 = Z[ti].mean(0), Z[si].mean(0)
+        S = (np.cov(Z[ti].T) if len(ti) > 1 else 0) + (np.cov(Z[si].T) if len(si) > 1 else 0)
+        S = 0.5 * np.asarray(S) + 0.5 * np.eye(Z.shape[1])            # shrinkage toward identity
+        w = np.linalg.solve(S, m1 - m0); c = w @ (m1 + m0) / 2
+        return w, c
+
+    # leave-one-out on the clicks
+    correct = []
+    for k in range(len(t)):
+        w, c = train(np.delete(t, k), s_); correct.append(Z[t[k]] @ w > c)
+    for k in range(len(s_)):
+        w, c = train(t, np.delete(s_, k)); correct.append(Z[s_[k]] @ w <= c)
+    w, c = train(t, s_)
+    score = Z @ w - c
+    scale = np.std(score) + 1e-9
+    p = 1 / (1 + np.exp(-score / scale * 2.5))
+    return p, {"separated": True, "source": "clicks", "clicks_tumour": int(len(t)), "clicks_stroma": int(len(s_)),
+               "loo_accuracy": round(float(np.mean(correct)), 3), "tumour_fraction": round(float((p > 0.5).mean()), 3)}

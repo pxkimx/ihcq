@@ -62,7 +62,15 @@ def find_white(rgb: np.ndarray, percentile: float = 99.5, default: float = 245.0
     cand = flat[(flat.min(1) >= 170) & ((flat.max(1) - flat.min(1)) <= 20)]
     if len(cand) < max(200, 0.005 * len(flat)):
         return np.full(3, default), False
-    return np.clip(np.percentile(cand, percentile, axis=0), 170, 255), True
+    # Glass is the brightest neutral cluster.  Its TYPICAL value is I0 — a high
+    # percentile lands on sensor noise and dust highlights instead, which sets
+    # I0 a few levels too bright, unequally per channel, and deconvolution
+    # turns that cast into false stain on pale tissue.
+    top = np.percentile(cand.mean(1), percentile)
+    glass = cand[cand.mean(1) >= top - 8]
+    if len(glass) < 100:
+        glass = cand[cand.mean(1) >= np.percentile(cand.mean(1), 90)]
+    return np.clip(np.median(glass, axis=0), 170, 255), True
 
 
 def estimate_white(rgb: np.ndarray, percentile: float = 99.5) -> np.ndarray:
