@@ -58,6 +58,14 @@ def _cfg_from_query(q: dict) -> Config:
         cfg.white_point = [float(v) for v in g("white").split(",")]
     if g("segment") == "0": cfg.segment = False
     if g("fit_stains") == "1": cfg.fit_stains = True
+    if g("dvec"):
+        from .stains import STAIN_VECTORS
+        dv = [float(v) for v in g("dvec").split(",")]
+        hv = [float(v) for v in g("hvec").split(",")] if g("hvec") else list(STAIN_VECTORS["hematoxylin"])
+        cfg.stain_vectors = [hv, dv]
+    elif g("hvec"):
+        from .stains import STAIN_VECTORS
+        cfg.stain_vectors = [[float(v) for v in g("hvec").split(",")], list(STAIN_VECTORS["dab"])]
     return cfg.validate()
 
 

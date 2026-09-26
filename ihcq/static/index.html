@@ -76,7 +76,17 @@
         <label class="check"><input id="segment" type="checkbox" checked> Find nuclei (uncheck for pixel metrics only)</label>
         <label class="check"><input id="fit_stains" type="checkbox"> Fit stain vectors per image (Macenko) — only if brown leaks into the hematoxylin panel; it changes the OD scale, so recalibrate cut points</label>
       </details>
-      <button class="btn primary" id="reanalyze" style="width:100%;margin-top:12px;justify-content:center" disabled>Re-analyze current image with these settings</button>
+      <details class="adv">
+        <summary>Stain &amp; white point</summary>
+        <p class="mut" style="margin:6px 0 8px">Choose a tool, then click a clean area in the viewer. Picked values override the textbook stain vectors and the automatic white point.</p>
+        <div class="seg" id="pickers" style="display:flex">
+          <button data-pick="white" style="flex:1">Glass</button><button data-pick="hema" style="flex:1">Hematoxylin</button><button data-pick="dab" style="flex:1">DAB</button>
+        </div>
+        <div class="vecs" id="vecs"><span class="mut">Using textbook vectors and automatic white point.</span></div>
+        <button class="btn sm ghost" id="vec-reset" style="margin-top:6px;padding-left:0">Reset to automatic</button>
+      </details>
+      <button class="btn primary" id="reanalyze" style="width:100%;margin-top:14px" disabled>Re-analyze current image with these settings</button>
+      <button class="btn" id="apply-all" style="width:100%;margin-top:8px" disabled>Apply settings to all images</button>
       <details class="adv" open>
         <summary>Cut points (DAB OD)</summary>
         <div class="cuts">
@@ -99,7 +109,7 @@
         <div class="dot b0"></div><div class="dot b1"></div><div class="dot b2"></div><div class="dot b3"></div>
       </div>
       <h2>Score a slide</h2>
-      <p>Drop an image on the left, or open a <b>Demo field</b> from the top bar to see every panel light up on a synthetic slide with known truth.</p>
+      <p>Drop an image on the left, or choose <b>Open a demo field</b> under the upload area to see every panel on a real IHC slide.</p>
     </div>
 
     <div id="result" hidden>
@@ -146,6 +156,7 @@
           </div>
           <div class="viewer" id="viewer">
             <canvas id="cv"></canvas>
+            <div class="picker-hint" id="picker-hint" hidden></div>
             <div class="vfloat">
               <label class="check inline tight"><input id="show-hot" type="checkbox" checked>hotspot</label>
               <button class="btn sm ghost" id="fit" title="Fit (F)">Fit</button>

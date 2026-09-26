@@ -5,12 +5,12 @@ const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [..
 const BIN = ["--b0", "--b1", "--b2", "--b3"], BINNAME = ["0", "1+", "2+", "3+"];
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : (typeof v === "number" ? v.toFixed(d) : String(v));
-const state = { csort: { c: "dab", dir: -1 }, cfilter: "all", rois: {}, tool: null, drawing: null, heat: null, results: {}, order: [], cur: null, th: { weak: .15, moderate: .40, strong: .80 }, layer: "cells", zoom: 1, pan: { x: 0, y: 0 }, imgs: {}, hover: null, sort: { k: "image", dir: 1 } };
+const state = { pick: null, custom: { white: null, hema: null, dab: null }, csort: { c: "dab", dir: -1 }, cfilter: "all", rois: {}, tool: null, drawing: null, heat: null, results: {}, order: [], cur: null, th: { weak: .15, moderate: .40, strong: .80 }, layer: "cells", zoom: 1, pan: { x: 0, y: 0 }, imgs: {}, hover: null, sort: { k: "image", dir: 1 } };
 
 /* ---------- theme ---------- */
 try { const t = localStorage.getItem("ihcq-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
 $("#theme").onclick = () => { const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); const nx = cur === "light" ? "dark" : "light"; document.documentElement.dataset.theme = nx; try { localStorage.setItem("ihcq-theme", nx); } catch (e) {} drawAll(); };
-if (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: light)").matches) document.documentElement.dataset.theme = "light";
+
 
 /* ---------- toast ---------- */
 let toastT; function toast(msg, bad = false) { const t = $("#toast"); t.textContent = msg; t.className = "toast" + (bad ? " bad" : ""); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, bad ? 6000 : 2600); }
@@ -28,11 +28,12 @@ const PRESETS = {
   pixels: { compartment: "nuclear", statistic: "mean", weak: .15, moderate: .40, strong: .80, segment: false, ring: 3 },
 };
 $("#preset").onchange = e => { const p = PRESETS[e.target.value]; for (const k of ["compartment", "statistic"]) $("#" + k).value = p[k]; for (const k of ["weak", "moderate", "strong", "ring"]) $("#" + k).value = p[k]; $("#segment").checked = p.segment; syncTh(); };
-function settingsQuery(name) { const p = new URLSearchParams(); for (const k of ["compartment", "backend", "statistic", "mpp", "radius", "ring", "weak", "moderate", "strong"]) { const v = $("#" + k).value; if (v !== "") p.set(k, v); } if (!$("#segment").checked) p.set("segment", "0"); if ($("#fit_stains").checked) p.set("fit_stains", "1"); if (name) p.set("name", name); return p.toString(); }
+function settingsQuery(name) { const p = new URLSearchParams(); for (const k of ["compartment", "backend", "statistic", "mpp", "radius", "ring", "weak", "moderate", "strong"]) { const v = $("#" + k).value; if (v !== "") p.set(k, v); } if (!$("#segment").checked) p.set("segment", "0"); if ($("#fit_stains").checked) p.set("fit_stains", "1"); const C = state.custom; if (C.white) p.set("white", C.white.join(",")); if (C.hema) p.set("hvec", C.hema.join(",")); if (C.dab) p.set("dvec", C.dab.join(",")); if (name) p.set("name", name); return p.toString(); }
 function syncTh() { state.th = { weak: +$("#weak").value, moderate: +$("#moderate").value, strong: +$("#strong").value }; if (state.cur) { drawHist(); live(); } }
 ["weak", "moderate", "strong"].forEach(k => $("#" + k).oninput = syncTh);
-$("#save-profile").onclick = () => { const cfg = { compartment: $("#compartment").value, cell_statistic: $("#statistic").value, backend: $("#backend").value, ring_px: +$("#ring").value || 3, mpp: $("#mpp").value ? +$("#mpp").value : null, nucleus_radius_px: $("#radius").value ? +$("#radius").value : null, segment: $("#segment").checked, thresholds: { weak: +$("#weak").value, moderate: +$("#moderate").value, strong: +$("#strong").value }, profile_name: "app-profile" }; const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(cfg, null, 2)], { type: "application/json" })); a.download = "ihcq_profile.json"; a.click(); toast("Profile saved — usable with  ihcq score --profile"); };
-$("#load-profile").onchange = async e => { const f = e.target.files[0]; if (!f) return; try { const c = JSON.parse(await f.text()); if (c.compartment) $("#compartment").value = c.compartment; if (c.cell_statistic) $("#statistic").value = c.cell_statistic; if (c.backend) $("#backend").value = c.backend; if (c.ring_px) $("#ring").value = c.ring_px; $("#mpp").value = c.mpp ?? ""; $("#radius").value = c.nucleus_radius_px ?? ""; if (c.segment !== undefined) $("#segment").checked = !!c.segment; if (c.thresholds) { $("#weak").value = c.thresholds.weak; $("#moderate").value = c.thresholds.moderate; $("#strong").value = c.thresholds.strong; } syncTh(); toast("Profile loaded: " + (c.profile_name || f.name)); } catch (err) { toast("Not a profile: " + err.message, true); } e.target.value = ""; };
+$("#save-profile").onclick = () => { const cfg = { compartment: $("#compartment").value, cell_statistic: $("#statistic").value, backend: $("#backend").value, ring_px: +$("#ring").value || 3, mpp: $("#mpp").value ? +$("#mpp").value : null, nucleus_radius_px: $("#radius").value ? +$("#radius").value : null, segment: $("#segment").checked, thresholds: { weak: +$("#weak").value, moderate: +$("#moderate").value, strong: +$("#strong").value }, profile_name: "app-profile",
+    white_point: state.custom.white || null, stain_vectors: state.custom.dab || state.custom.hema ? [state.custom.hema || [0.65, 0.704, 0.286], state.custom.dab || [0.268, 0.57, 0.776]] : null }; const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(cfg, null, 2)], { type: "application/json" })); a.download = "ihcq_profile.json"; a.click(); toast("Profile saved — usable with  ihcq score --profile"); };
+$("#load-profile").onchange = async e => { const f = e.target.files[0]; if (!f) return; try { const c = JSON.parse(await f.text()); if (c.compartment) $("#compartment").value = c.compartment; if (c.cell_statistic) $("#statistic").value = c.cell_statistic; if (c.backend) $("#backend").value = c.backend; if (c.ring_px) $("#ring").value = c.ring_px; $("#mpp").value = c.mpp ?? ""; $("#radius").value = c.nucleus_radius_px ?? ""; if (c.segment !== undefined) $("#segment").checked = !!c.segment; state.custom = { white: c.white_point || null, hema: c.stain_vectors ? c.stain_vectors[0] : null, dab: c.stain_vectors ? c.stain_vectors[1] : null, hemaRGB: [110, 120, 190], dabRGB: [130, 80, 40] }; renderVecs(); if (c.thresholds) { $("#weak").value = c.thresholds.weak; $("#moderate").value = c.thresholds.moderate; $("#strong").value = c.thresholds.strong; } syncTh(); toast("Profile loaded: " + (c.profile_name || f.name)); } catch (err) { toast("Not a profile: " + err.message, true); } e.target.value = ""; };
 
 /* ---------- upload queue ---------- */
 const drop = $("#drop"), file = $("#file"), queue = $("#queue");
@@ -57,6 +58,36 @@ const menu = $("#demo-menu"); $("#demo").onclick = e => { e.stopPropagation(); m
 $("#demo").ondblclick = () => $$("button", menu)[0].click();
 $$("button", menu).forEach(b => b.onclick = async () => { menu.hidden = true; if (b.dataset.kind === "real" && $("#preset").value !== "membrane" && $("#preset").value !== "pale") { $("#preset").value = "membrane"; $("#preset").dispatchEvent(new Event("change")); toast("Preset switched to Membrane marker for this stain"); } const li = document.createElement("li"); li.innerHTML = `<span class="nm">demo · ${b.textContent}</span><span class="st busy">scoring</span>`; queue.prepend(li); try { const r = await fetch(`/api/demo?kind=${b.dataset.kind}&` + settingsQuery()); const j = await r.json(); if (!r.ok) throw new Error(j.error); $(".st", li).textContent = "H " + fmt(j.summary.h_score, 0); $(".st", li).className = "st done"; li.onclick = () => show(j.id); li.dataset.id = j.id; add(j); show(j.id); } catch (err) { $(".st", li).textContent = "failed"; $(".st", li).className = "st err"; toast(err.message, true); } });
 $("#quit").onclick = async () => { await fetch("/api/quit", { method: "POST" }); document.body.innerHTML = '<p style="padding:40px;font:15px system-ui">IHCq stopped. You can close this tab.</p>'; };
+
+/* ---------- eyedroppers: white point & stain vectors ---------- */
+const PICK_HINT = { white: "Click bare glass (no tissue)", hema: "Click the centre of a blue, DAB-negative nucleus", dab: "Click solid brown staining" };
+$$("#pickers button").forEach(b => b.onclick = () => { if (!state.cur) return toast("Open an image first", true); state.pick = state.pick === b.dataset.pick ? null : b.dataset.pick; state.tool = null; $$("#roi-tools button").forEach(x => x.setAttribute("aria-pressed", "false")); $$("#pickers button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.pick === state.pick))); const h = $("#picker-hint"); h.hidden = !state.pick; h.textContent = PICK_HINT[state.pick] || ""; viewer.style.cursor = state.pick ? "crosshair" : "grab"; });
+function sampleRGB(ix, iy) { const im = state.imgs.original; if (!state.sampler || state.sampler.src !== im.src) { const c = document.createElement("canvas"); c.width = im.width; c.height = im.height; const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(im, 0, 0); state.sampler = { src: im.src, g }; }
+  const r = 4, x0 = Math.max(0, Math.round(ix) - r), y0 = Math.max(0, Math.round(iy) - r); const d = state.sampler.g.getImageData(x0, y0, 2 * r + 1, 2 * r + 1).data; const ch = [[], [], []];
+  for (let i = 0; i < d.length; i += 4) for (let k = 0; k < 3; k++) ch[k].push(d[i + k]); return ch.map(a => { a.sort((p, q) => p - q); return a[a.length >> 1]; }); }
+function odVec(rgb) { const w = state.custom.white || (state.results[state.cur]?.summary.white_point) || [245, 245, 245]; const od = rgb.map((v, k) => Math.max(1e-4, -Math.log10((v + 1) / (w[k] + 1)))); const n = Math.hypot(...od); return od.map(v => +(v / n).toFixed(4)); }
+function renderVecs() { const C = state.custom, rows = [];
+  const sw = rgb => `<i style="background:rgb(${rgb.join(",")})"></i>`;
+  if (C.white) rows.push(`${sw(C.white)}<span>glass ${C.white.join(" / ")}</span>`);
+  if (C.hema) rows.push(`${sw(state.custom.hemaRGB)}<span>H ${C.hema.map(v => v.toFixed(3)).join(" ")}</span>`);
+  if (C.dab) rows.push(`${sw(state.custom.dabRGB)}<span>DAB ${C.dab.map(v => v.toFixed(3)).join(" ")}</span>`);
+  $("#vecs").innerHTML = rows.length ? rows.join("") : '<span class="mut" style="grid-column:1/-1">Using textbook vectors and automatic white point.</span>'; }
+function finishPick(ix, iy) { const rgb = sampleRGB(ix, iy), k = state.pick;
+  if (k === "white") { if (Math.min(...rgb) < 170) return toast("That looks like tissue, not glass — pick a brighter area", true); state.custom.white = rgb; }
+  else { const v = odVec(rgb); if (Math.hypot(...rgb.map((c, i) => c - (state.custom.white || [245, 245, 245])[i])) < 25) return toast("Too pale to estimate a stain vector — pick a darker spot", true); state.custom[k] = v; state.custom[k + "RGB"] = rgb;
+    const ref = k === "dab" ? [0.268, 0.57, 0.776] : [0.65, 0.704, 0.286]; const n = Math.hypot(...ref); const ang = Math.acos(Math.min(1, v.reduce((a, x, i) => a + x * ref[i] / n, 0))) * 180 / Math.PI;
+    toast(`${k === "dab" ? "DAB" : "Hematoxylin"} vector set — ${ang.toFixed(0)}° from textbook${ang > 25 ? " (large: check you clicked a pure area)" : ""}`); }
+  if (k === "white") toast(`White point set to ${rgb.join(" / ")}`);
+  state.pick = null; $$("#pickers button").forEach(x => x.setAttribute("aria-pressed", "false")); $("#picker-hint").hidden = true; viewer.style.cursor = "grab"; renderVecs(); markDirty(); }
+$("#vec-reset").onclick = () => { state.custom = { white: null, hema: null, dab: null }; renderVecs(); markDirty(); toast("Back to textbook vectors and automatic white point"); };
+function markDirty() { if (state.cur) { const b = $("#reanalyze"); b.textContent = "Re-analyze current image with these settings ↻"; } }
+
+/* ---------- apply to all ---------- */
+$("#apply-all").onclick = async () => { const ids = [...state.order]; if (!ids.length) return; const b = $("#apply-all"); b.disabled = true; let ok = 0, gone = 0;
+  for (let i = 0; i < ids.length; i++) { b.textContent = `Re-analyzing ${i + 1} of ${ids.length}…`; const old = state.results[ids[i]];
+    try { const r = await fetch(`/api/reanalyze?id=${ids[i]}&` + settingsQuery(), { method: "POST" }); const nj = await r.json(); if (!r.ok) throw new Error(nj.error); nj.truth = old.truth; nj.note = old.note; add(nj); ok++; } catch (e) { gone++; } }
+  b.textContent = "Apply settings to all images"; b.disabled = false; if (state.cur) show(state.cur);
+  toast(`Re-analyzed ${ok} image${ok === 1 ? "" : "s"}${gone ? ` · ${gone} no longer in memory — drop them again` : ""}`, gone > 0); };
 
 /* ---------- re-analyze / group / downloads ---------- */
 $("#reanalyze").onclick = async () => { const j = state.results[state.cur]; if (!j) return; const b = $("#reanalyze"); b.disabled = true; b.textContent = "Re-analyzing…";
@@ -86,7 +117,7 @@ async function show(id) {
 
   $("#dl-cells").href = j.cells_csv || "#"; $("#dl-cells").style.visibility = j.cells_csv ? "visible" : "hidden";
   $("#truth").textContent = j.truth ? `Synthetic field — truth: H = ${j.truth.h_score}, ${j.truth.pct_positive}% positive, ${j.truth.n_cells} nuclei.` : (j.note || "");
-  $("#group").value = s.group || ""; $("#reanalyze").disabled = false;
+  $("#group").value = s.group || ""; $("#reanalyze").disabled = false; $("#apply-all").disabled = false;
   $("#dl-orig").href = j.original; $("#dl-orig").download = s.image + "_original.png";
   $("#dl-cells-img").href = j.overlays.cells || "#"; $("#dl-cells-img").download = s.image + "_labelled_nuclei.png";
   $("#dl-pos").href = j.overlays.positivity; $("#dl-pos").download = s.image + "_positivity.png";
@@ -157,7 +188,7 @@ function heatCanvas() {
 /* ROI tools */
 $$("#roi-tools button").forEach(b => b.onclick = () => { const t = b.dataset.tool; if (t === "clear") { state.rois[state.cur] = { include: [], exclude: [] }; state.drawing = null; state.tool = null; $$("#roi-tools button").forEach(x => x.setAttribute("aria-pressed", "false")); $("#roi-apply").disabled = false; $("#roi-apply").textContent = "Score full field"; drawViewer(); return; } state.tool = state.tool === t ? null : t; state.drawing = null; $$("#roi-tools button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.tool === state.tool))); viewer.style.cursor = state.tool ? "crosshair" : "grab"; });
 function imgPoint(e) { const r = cv.getBoundingClientRect(); const sc = state.base * state.zoom; return [((e.clientX - r.left) * devicePixelRatio - state.pan.x) / sc, ((e.clientY - r.top) * devicePixelRatio - state.pan.y) / sc]; }
-viewer.addEventListener("click", e => { if (!state.tool || !state.cur || e.target.closest(".vfloat")) return; const p = imgPoint(e); if (!state.drawing) state.drawing = { tool: state.tool, pts: [] }; state.drawing.pts.push([Math.round(p[0]), Math.round(p[1])]); drawViewer(); });
+viewer.addEventListener("click", e => { if (e.target.closest(".vfloat")) return; if (state.pick && state.cur) { const p = imgPoint(e); return finishPick(p[0], p[1]); } if (!state.tool || !state.cur) return; const p = imgPoint(e); if (!state.drawing) state.drawing = { tool: state.tool, pts: [] }; state.drawing.pts.push([Math.round(p[0]), Math.round(p[1])]); drawViewer(); });
 viewer.addEventListener("dblclick", e => { if (!state.drawing) return; e.preventDefault(); const d = state.drawing; state.drawing = null; if (d.pts.length >= 3) { const R = state.rois[state.cur] = state.rois[state.cur] || { include: [], exclude: [] }; R[d.tool].push(d.pts.slice(0, -1)); $("#roi-apply").disabled = false; $("#roi-apply").textContent = "Score inside ROI"; toast(`${d.tool === "include" ? "ROI" : "Exclusion"} closed — ${d.pts.length - 1} points`); } drawViewer(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape" && state.drawing) { state.drawing = null; drawViewer(); } });
 $("#roi-apply").onclick = async () => { const j = state.results[state.cur]; if (!j) return; const R = state.rois[state.cur] || { include: [], exclude: [] }; const b = $("#roi-apply"); b.disabled = true; b.textContent = "Scoring…";
@@ -168,7 +199,7 @@ $$("#layers button").forEach(b => b.onclick = () => setLayer(b.dataset.layer));
 function setLayer(l) { state.layer = l; $$("#layers button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.layer === l))); drawViewer(); }
 $("#opacity").oninput = drawViewer; $("#fit").onclick = () => { fitView(); drawViewer(); };
 viewer.addEventListener("wheel", e => { e.preventDefault(); const r = cv.getBoundingClientRect(); const mx = (e.clientX - r.left) * devicePixelRatio, my = (e.clientY - r.top) * devicePixelRatio; const f = Math.exp(-e.deltaY * 0.0015); const nz = Math.min(12, Math.max(1, state.zoom * f)); const k = nz / state.zoom; state.pan.x = mx - (mx - state.pan.x) * k; state.pan.y = my - (my - state.pan.y) * k; state.zoom = nz; if (nz === 1) fitView(); drawViewer(); }, { passive: false });
-let drag = null; viewer.addEventListener("pointerdown", e => { if (state.tool || e.target.closest(".vfloat")) return; drag = { x: e.clientX, y: e.clientY, px: state.pan.x, py: state.pan.y }; viewer.setPointerCapture(e.pointerId); });
+let drag = null; viewer.addEventListener("pointerdown", e => { if (state.tool || state.pick || e.target.closest(".vfloat")) return; drag = { x: e.clientX, y: e.clientY, px: state.pan.x, py: state.pan.y }; viewer.setPointerCapture(e.pointerId); });
 viewer.addEventListener("pointerup", () => drag = null);
 viewer.addEventListener("pointermove", e => {
   if (drag) { state.pan.x = drag.px + (e.clientX - drag.x) * devicePixelRatio; state.pan.y = drag.py + (e.clientY - drag.y) * devicePixelRatio; drawViewer(); return; }
@@ -206,7 +237,7 @@ function binOf(v) { const t = state.th; return (v >= t.weak) + (v >= t.moderate)
 function histGeom() { const W = hist.width, H = hist.height, pad = { l: 34, r: 10, t: 12, b: 24 }; const j = state.results[state.cur]; const vals = j.cells.map(c => c[3]); const xmax = Math.max(1.0, ...vals) * 1.05; return { W, H, pad, vals, xmax, X: v => pad.l + v / xmax * (W - pad.l - pad.r) }; }
 function drawHist() {
   const j = state.results[state.cur]; if (!j) return; hist.width = hist.clientWidth * devicePixelRatio; hist.height = 190 * devicePixelRatio; hctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-  const W = hist.clientWidth, H = 190, pad = { l: 34, r: 10, t: 12, b: 24 }; const vals = j.cells.map(c => c[3]);
+  const W = hist.clientWidth, H = 190, pad = { l: 34, r: 10, t: 26, b: 24 }; const vals = j.cells.map(c => c[3]);
   hctx.clearRect(0, 0, W, H);
   if (!vals.length) { hctx.fillStyle = css("--mut"); hctx.font = "12px " + css("--ui"); hctx.fillText("no nuclei in this field — pixel metrics only", pad.l, H / 2); return; }
   const xmax = Math.max(1.0, ...vals) * 1.05, nb = 60, bw = xmax / nb, counts = new Array(nb).fill(0);
@@ -217,7 +248,7 @@ function drawHist() {
   hctx.globalAlpha = 1; hctx.fillStyle = css("--mut"); hctx.font = "10px " + css("--mono"); hctx.textAlign = "center";
   for (let v = 0; v <= xmax; v += xmax > 2 ? .5 : .25) hctx.fillText(v.toFixed(2), X(v), H - 8);
   hctx.save(); hctx.translate(10, H / 2); hctx.rotate(-Math.PI / 2); hctx.fillText("cells", 0, 0); hctx.restore();
-  hctx.textAlign = "left"; hctx.fillText("DAB OD in scoring compartment", pad.l, 9);
+  hctx.textAlign = "right"; hctx.fillText("DAB OD in scoring compartment", W - pad.r, 11);
   [["weak", 1], ["moderate", 2], ["strong", 3]].forEach(([k, b]) => { const x = X(state.th[k]); hctx.strokeStyle = css(BIN[b]); hctx.lineWidth = 2; hctx.setLineDash([4, 3]); hctx.beginPath(); hctx.moveTo(x, pad.t); hctx.lineTo(x, H - pad.b); hctx.stroke(); hctx.setLineDash([]); hctx.fillStyle = css(BIN[b]); hctx.beginPath(); hctx.moveTo(x - 6, pad.t); hctx.lineTo(x + 6, pad.t); hctx.lineTo(x, pad.t + 7); hctx.fill(); hctx.fillStyle = css("--ink"); hctx.font = "bold 10px " + css("--mono"); hctx.textAlign = "center"; hctx.fillText(state.th[k].toFixed(2), x, pad.t + 18); });
   state.histX = X; state.histInv = px => (px - pad.l) / (W - pad.l - pad.r) * xmax;
 }
