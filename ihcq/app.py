@@ -174,6 +174,39 @@ def _derive(entry: dict, th: Thresholds | None = None, roi: dict | None = None) 
     return _payload(entry["id"], entry, paths)
 
 
+def _regions(rid: str, polys: list) -> dict:
+    """Score every include polygon on its own (no merging), from the full-field snapshot."""
+    from scipy import ndimage as ndi
+    from .metrics import per_cell_table, cell_summary, pixel_summary
+    entry = _cached(rid); res, base = entry["res"], entry["base"]
+    cfg = res.config
+    shape = base["tissue"].shape
+    labels, score_labels = base["labels"], base["score_labels"]
+    dab, hema = res.conc[..., 1], res.conc[..., 0]
+    n = int(labels.max())
+    cells_all = per_cell_table(labels, score_labels, dab, hema, cfg.thresholds, cfg.cell_statistic, cfg.mpp) if cfg.segment and n else pd.DataFrame()
+    out = []
+    for i, poly in enumerate(polys or [], 1):
+        m = _polys_mask(shape, [poly]); t = base["tissue"] & m
+        row = {"region": i, "tissue_px": int(t.sum())}
+        px = pixel_summary(dab, hema, t, cfg.thresholds, cfg.pixel_positive_od, cfg.mpp)
+        row.update({k: px.get(k) for k in ("dab_area_fraction_pct", "mean_dab_od_tissue", "tissue_area_mm2")})
+        if len(cells_all):
+            yi = cells_all["y"].round().astype(int).clip(0, shape[0] - 1).to_numpy(); xi = cells_all["x"].round().astype(int).clip(0, shape[1] - 1).to_numpy()
+            c = cells_all[m[yi, xi]]
+            cs = cell_summary(c.reset_index(drop=True), int(t.sum()), cfg.mpp)
+            row.update({k: cs.get(k) for k in ("n_cells", "pct_positive", "pct_positive_ci95", "h_score", "allred_total", "irs", "pct_3plus", "cells_per_mm2", "positive_cells_per_mm2", "cells_per_tissue_px1e4")})
+        out.append(row)
+    # two-region comparison of positivity: Fisher exact on positive/negative counts
+    test = None
+    if len(out) == 2 and all(r.get("n_cells") for r in out):
+        from scipy.stats import fisher_exact
+        a = [round(out[k]["pct_positive"] / 100 * out[k]["n_cells"]) for k in (0, 1)]
+        tab = [[a[0], out[0]["n_cells"] - a[0]], [a[1], out[1]["n_cells"] - a[1]]]
+        test = {"test": "Fisher exact, positive vs negative cells", "p": float(fisher_exact(tab)[1])}
+    return {"regions": out, "test": test}
+
+
 def _cached(rid: str) -> dict:
     entry = SESSION["cache"].get(rid)
     if entry is None:
@@ -365,6 +398,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/rebin":
                 th = Thresholds(float(q["weak"][0]), float(q["moderate"][0]), float(q["strong"][0])); th.validate()
                 return self._send(200, _rebin(q["id"][0], th))
+            if u.path == "/api/regions":
+                body = json.loads(raw or b"{}")
+                return self._send(200, _regions(q["id"][0], body.get("include") or []))
             if u.path == "/api/roi":
                 body = json.loads(raw or b"{}")
                 return self._send(200, _roi(q["id"][0], body.get("include") or [], body.get("exclude") or []))

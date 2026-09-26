@@ -34,6 +34,8 @@ The classical backend needs none of this and runs anywhere the core installs.
 
 ## The desktop app
 
+The interface follows Apple's design language: system typography, one accent colour, quiet grouped surfaces, translucent toolbars, and colour reserved for data (the four bin colours). It follows the system light/dark setting.
+
 ```bash
 ihcq app                    # opens http://127.0.0.1:8765 in your browser
 ```
@@ -53,6 +55,17 @@ interface; nothing leaves the machine. What it does:
   heat layers with opacity, scroll-zoom (never below fit) and drag-pan,
   hover on any nucleus for its bin and ODs, a hotspot marker, and ROI
   include/exclude polygons with *Score inside ROI*.
+- **Regions** — draw several ＋ ROIs and *Compare regions* scores each one
+  separately (nuclei, % positive with 95 % CI, H-score, IRS, 3+ %, DAB area,
+  density), with a Fisher exact test when there are two — e.g. invasive
+  margin vs tumour centre. On the demo, nest vs stroma: 93.1 % (CI 78–98)
+  vs 0 % (CI 0–14), p < 0.001.
+- **Stain & white point eyedroppers** — click bare glass, a blue negative
+  nucleus and solid brown staining; IHCq computes the OD vectors from a 9×9
+  median, reports the angle to the textbook vector, and uses them on
+  re-analysis. Saved profiles carry them, so a calibration is done once.
+- **Apply settings to all images** — re-analyzes every image in the session
+  with the current settings, cut points and stain vectors.
 - **Cell table** — every nucleus with bin, DAB and hematoxylin OD, area and
   position; sortable, filterable by bin, and clicking a row flies the viewer
   to that nucleus.

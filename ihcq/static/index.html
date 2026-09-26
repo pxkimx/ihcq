@@ -153,6 +153,7 @@
               <button data-tool="clear">Clear</button>
             </div>
             <button class="btn primary sm" id="roi-apply" disabled>Score inside ROI</button>
+            <button class="btn sm" id="roi-compare" disabled title="Score each ＋ ROI on its own">Compare regions</button>
           </div>
           <div class="viewer" id="viewer">
             <canvas id="cv"></canvas>
@@ -163,6 +164,10 @@
               <span id="zoom-label">100%</span>
             </div>
             <div class="tip" id="tip" hidden></div>
+          </div>
+          <div id="regions" hidden style="margin-top:12px">
+            <div class="card-head" style="margin-bottom:6px"><h3 style="margin:0">Regions <span class="mut">each ＋ ROI scored on its own</span></h3><span class="mut" id="reg-test"></span></div>
+            <div class="tw"><table id="rtab"><thead><tr><th>region</th><th class="n">nuclei</th><th class="n">% positive</th><th class="n">95% CI</th><th class="n">H-score</th><th class="n">IRS</th><th class="n">3+ %</th><th class="n">DAB area %</th><th class="n">nuclei density</th></tr></thead><tbody></tbody></table></div>
           </div>
           <div class="legend">
             <span><i class="b0"></i>0</span><span><i class="b1"></i>1+</span><span><i class="b2"></i>2+</span><span><i class="b3"></i>3+</span>

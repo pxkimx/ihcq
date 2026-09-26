@@ -117,6 +117,7 @@ async function show(id) {
 
   $("#dl-cells").href = j.cells_csv || "#"; $("#dl-cells").style.visibility = j.cells_csv ? "visible" : "hidden";
   $("#truth").textContent = j.truth ? `Synthetic field — truth: H = ${j.truth.h_score}, ${j.truth.pct_positive}% positive, ${j.truth.n_cells} nuclei.` : (j.note || "");
+  $("#regions").hidden = true;
   $("#group").value = s.group || ""; $("#reanalyze").disabled = false; $("#apply-all").disabled = false;
   $("#dl-orig").href = j.original; $("#dl-orig").download = s.image + "_original.png";
   $("#dl-cells-img").href = j.overlays.cells || "#"; $("#dl-cells-img").download = s.image + "_labelled_nuclei.png";
@@ -167,7 +168,9 @@ function drawViewer() {
   // ROI polygons
   const R = state.rois[state.cur] || { include: [], exclude: [] };
   const poly = (pts, col, dash, close) => { if (pts.length < 1) return; ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); if (close) ctx.closePath(); ctx.lineWidth = 2.5 / sc; ctx.strokeStyle = col; ctx.setLineDash(dash ? [8 / sc, 5 / sc] : []); ctx.stroke(); ctx.setLineDash([]); if (close) { ctx.fillStyle = col; ctx.globalAlpha = .10; ctx.fill(); ctx.globalAlpha = 1; } pts.forEach(p => { ctx.beginPath(); ctx.arc(p[0], p[1], 3.5 / sc, 0, 7); ctx.fillStyle = col; ctx.fill(); }); };
-  R.include.forEach(p => poly(p, "#3dd68c", false, true)); R.exclude.forEach(p => poly(p, "#ff5c72", true, true));
+  R.include.forEach((p, i) => { poly(p, "#3dd68c", false, true); const cx = p.reduce((a, q) => a + q[0], 0) / p.length, cy = p.reduce((a, q) => a + q[1], 0) / p.length; ctx.beginPath(); ctx.arc(cx, cy, 11 / sc, 0, 7); ctx.fillStyle = REGCOL[i % REGCOL.length]; ctx.fill(); ctx.fillStyle = "#fff"; ctx.font = `600 ${12 / sc}px -apple-system, system-ui`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(i + 1), cx, cy); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; });
+  R.exclude.forEach(p => poly(p, "#ff5c72", true, true));
+  $("#roi-compare").disabled = !R.include.length;
   if (state.drawing) poly(state.drawing.pts, state.drawing.tool === "include" ? "#3dd68c" : "#ff5c72", true, false);
   const j = state.results[state.cur];
   if ($("#show-hot").checked && j && j.summary.hotspot_xy) { const [hx, hy] = j.summary.hotspot_xy; const rr = Math.sqrt((j.summary.hotspot_window || 500) / Math.max(1, j.cells.length)) * Math.sqrt(im.width * im.height) * 0.56; ctx.beginPath(); ctx.arc(hx, hy, rr, 0, 7); ctx.lineWidth = 3 / sc; ctx.strokeStyle = "#ff4d5e"; ctx.setLineDash([6 / sc, 4 / sc]); ctx.stroke(); ctx.setLineDash([]); ctx.font = `bold ${13 / sc}px ${css("--mono")}`; ctx.fillStyle = "#ff4d5e"; ctx.fillText(`hotspot ${fmt(j.summary.hotspot_pct_positive)}%`, hx - rr, hy - rr - 6 / sc); }
@@ -195,6 +198,12 @@ $("#roi-apply").onclick = async () => { const j = state.results[state.cur]; if (
   try { const r = await fetch(`/api/roi?id=${j.id}`, { method: "POST", body: JSON.stringify(R) }); const nj = await r.json(); if (!r.ok) throw new Error(nj.error); nj.truth = j.truth; nj.note = j.note; add(nj); await show(nj.id); toast(R.include.length || R.exclude.length ? `Scored inside ROI (${fmt((nj.summary.roi_fraction || 0) * 100, 0)}% of tissue)` : "Scored the full field"); }
   catch (err) { toast(err.message, true); } finally { b.textContent = "Score inside ROI"; } };
 $("#show-hot").onchange = drawViewer;
+$("#roi-compare").onclick = async () => { const j = state.results[state.cur]; const R = state.rois[state.cur] || { include: [] }; if (!R.include.length) return toast("Draw at least one ＋ ROI first", true);
+  try { const r = await fetch(`/api/regions?id=${j.id}`, { method: "POST", body: JSON.stringify({ include: R.include }) }); const d = await r.json(); if (!r.ok) throw new Error(d.error);
+    $("#rtab tbody").innerHTML = d.regions.map(g => `<tr><td><span class="bdot" style="background:${REGCOL[(g.region - 1) % REGCOL.length]}"></span>Region ${g.region}</td><td class="n">${fmt(g.n_cells, 0)}</td><td class="n"><b>${fmt(g.pct_positive)}</b></td><td class="n">${g.pct_positive_ci95 ? g.pct_positive_ci95.join("–") : "—"}</td><td class="n">${fmt(g.h_score)}</td><td class="n">${fmt(g.irs, 0)}</td><td class="n">${fmt(g.pct_3plus)}</td><td class="n">${fmt(g.dab_area_fraction_pct)}</td><td class="n">${g.cells_per_mm2 != null ? fmt(g.cells_per_mm2, 0) + " /mm²" : fmt(g.cells_per_tissue_px1e4, 2) + " /10⁴px"}</td></tr>`).join("");
+    $("#reg-test").innerHTML = d.test ? `${d.test.test}: <span class="pval ${d.test.p < .05 ? "sig" : "ns"}">${d.test.p < .001 ? "p < 0.001" : "p = " + d.test.p.toFixed(3)}</span>` : (d.regions.length === 2 ? "" : "draw exactly two regions for a significance test");
+    $("#regions").hidden = false; state.showRegionNums = true; drawViewer(); } catch (err) { toast(err.message, true); } };
+const REGCOL = ["#0a84ff", "#bf5af2", "#30d158", "#ff9f0a", "#ff375f", "#64d2ff"];
 $$("#layers button").forEach(b => b.onclick = () => setLayer(b.dataset.layer));
 function setLayer(l) { state.layer = l; $$("#layers button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.layer === l))); drawViewer(); }
 $("#opacity").oninput = drawViewer; $("#fit").onclick = () => { fitView(); drawViewer(); };

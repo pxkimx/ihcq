@@ -151,7 +151,7 @@ details.adv summary::before{content:none}
 
 /* ---------- viewer ---------- */
 .viewer-card{padding:12px}
-.viewer-bar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.viewer-bar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;row-gap:8px}
 .viewer-bar::-webkit-scrollbar{display:none}.viewer-bar>*{flex:0 0 auto}
 #opacity{width:80px}
 .viewer{position:relative;aspect-ratio:1/1;max-height:calc(100vh - 220px);border-radius:10px;overflow:hidden;background:#111;cursor:grab}
