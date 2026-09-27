@@ -173,6 +173,23 @@
             </div>
             <div class="tip" id="tip" hidden></div>
           </div>
+          <div class="measure" id="measure">
+            <div class="card-head" style="margin:14px 0 8px">
+              <h3 style="margin:0">Measure regions <span class="mut">trace layers such as media and adventitia — area, nuclei and ratios</span></h3>
+              <a class="btn sm ghost" id="m-csv" download hidden>CSV</a>
+            </div>
+            <div class="m-regions" id="m-regions"></div>
+            <div class="m-tools">
+              <button class="btn sm" id="m-new">＋ New region</button>
+              <div class="seg" id="m-mode"><button data-m="free" aria-pressed="true">Freehand</button><button data-m="points">Points</button></div>
+              <div class="seg" id="m-tool"><button data-t="add">Trace</button><button data-t="cut">Cut out</button></div>
+              <button class="btn sm ghost" id="m-undo">Undo</button>
+              <button class="btn sm ghost" id="m-del">Delete region</button>
+              <span class="mut" id="m-hint">Hold Space to pan while tracing.</span>
+            </div>
+            <datalist id="m-names"><option value="Media"><option value="Adventitia"><option value="Intima"><option value="Lumen"><option value="Neointima"><option value="Tumour"><option value="Stroma"><option value="Necrosis"><option value="Invasive margin"><option value="Tumour centre"></datalist>
+            <div id="m-out"></div>
+          </div>
           <div id="regions" hidden style="margin-top:12px">
             <div class="card-head" style="margin-bottom:6px"><h3 style="margin:0">Regions <span class="mut">each ＋ ROI scored on its own</span></h3><span class="mut" id="reg-test"></span></div>
             <div class="tw"><table id="rtab"><thead><tr><th>region</th><th class="n">nuclei</th><th class="n">% positive</th><th class="n">95% CI</th><th class="n">H-score</th><th class="n">IRS</th><th class="n">3+ %</th><th class="n">DAB area %</th><th class="n">nuclei density</th></tr></thead><tbody></tbody></table></div>
@@ -307,6 +324,7 @@
 <script src="/static/app-tools.js"></script>
 <script src="/static/app-results.js"></script>
 <script src="/static/app-viewer.js"></script>
+<script src="/static/app-measure.js"></script>
 <script src="/static/app-session.js"></script>
 </body>
 </html>

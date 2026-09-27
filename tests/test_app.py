@@ -89,3 +89,25 @@ def test_slide_job(server, tmp_path):
     direct = analyze(rgb, Config(mpp=0.5, white_point=s["white_point"])).summary
     assert abs(s["n_cells"] - direct["n_cells"]) <= 0.01 * direct["n_cells"]        # slide plumbing == direct analysis
     assert abs(s["pct_positive"] - direct["pct_positive"]) < 1.0
+
+
+def test_measure_regions(server):
+    """Traced media / adventitia ring: exact areas, additive nuclei, no false overlap on the shared edge."""
+    import math
+    rgb, *_ = make_field(n_cells=450, seed=12, size=(768, 1024))
+    rid = post(server, "/api/score?name=vessel", png(rgb))["id"]
+    circ = lambda r, n=720: [[512 + r * math.cos(2 * math.pi * k / n), 384 + r * math.sin(2 * math.pi * k / n)] for k in range(n)]
+    sq = [[20, 20], [120, 20], [120, 120], [20, 120]]
+    regs = [{"name": "Adventitia", "include": [circ(250)], "exclude": [circ(180)]},
+            {"name": "Media", "include": [circ(180)], "exclude": [circ(120)]},
+            {"name": "Square", "include": [sq]}]
+    m = post(server, f"/api/measure?id={rid}", json.dumps({"regions": regs, "mpp": 0.5}).encode())
+    r = {x["name"]: x for x in m["regions"]}
+    assert r["Square"]["area_px"] == 10000 and r["Square"]["perimeter_px"] == 400
+    assert abs(r["Media"]["area_px"] / (math.pi * (180**2 - 120**2)) - 1) < 0.002
+    assert abs(r["Adventitia"]["area_um2"] / (0.25 * math.pi * (250**2 - 180**2)) - 1) < 0.002
+    ratio = next(x for x in m["ratios"] if x["a"] == "Adventitia" and x["b"] == "Media")["area_ratio"]
+    assert abs(ratio - 1.6722) < 0.005
+    assert m["overlaps"] == []
+    whole = post(server, f"/api/measure?id={rid}", json.dumps({"regions": [{"name": "All", "include": [circ(250)], "exclude": [circ(120)]}]}).encode())
+    assert whole["regions"][0]["nuclei"] == r["Media"]["nuclei"] + r["Adventitia"]["nuclei"]

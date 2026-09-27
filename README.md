@@ -370,6 +370,38 @@ the full-field result rather than from the previous one. On the colon demo:
 full field 64.7 % positive (H 145); one epithelial nest 93 % (H 200); pure
 stroma 0 %.
 
+### Measuring traced regions (media vs adventitia, cortex vs medulla …)
+
+The **Measure regions** card, below the viewer, is for morphometry: trace several
+named layers and compare them. Choose **＋ New region** and pick a name
+(Media, Adventitia, Intima, Lumen …, or type your own). Draw it **Freehand**
+(drag, release to close) or with **Points** (click, double-click to close).
+Switch to **Cut out** to remove a hole, so a ring such as the media is
+"outer outline minus lumen". Hold Space to pan while you draw.
+
+For each region you get:
+
+- area in px², or µm² and mm² once the pixel size is set;
+- perimeter (outer outline plus any cut-outs);
+- % of the total traced area;
+- nuclei, and positive nuclei with a Wilson 95 % CI;
+- H-score, nuclear density per mm², DAB area % and mean DAB OD.
+
+For any two regions the ratio panel shows the **area ratio** and the
+**nuclei ratio**. Three or more regions get a full ratio matrix. Regions
+that genuinely overlap are flagged; a shared boundary drawn twice is not.
+
+- Traced regions are saved in the project and on a page of the PDF report.
+- Each run also writes `*_measurements.csv`.
+- On whole slides, regions are measured on the overview.
+
+Areas use the pixel-centre rule: a pixel belongs to a region when its centre
+lies inside the outline. The result is unbiased. A 100 × 100 px square measures
+exactly 10 000 px². A traced vessel wall gets within 0.03 % of the true
+annulus area, with the true adventitia ÷ media ratio 1.672 reported as 1.673.
+Nuclei are counted by centroid, so the counts in adjoining regions add up to
+the count for the two traced as one.
+
 ### Handing it the wrong stain (H&E)
 
 Tested on **HERE101** (101 pathologist-annotated H&E fields, 25 tissue

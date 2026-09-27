@@ -42,7 +42,8 @@ $("#tumour_only").addEventListener("change", async e => { const j = state.result
 $("#proj-save").addEventListener("click", e => { if (!state.order.length) { e.preventDefault(); toast("Score an image first — there is nothing to save", true); } else toast("Saving project — originals, settings, regions and groups"); });
 $("#proj-open").onchange = async e => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; toast(`Opening ${f.name} — re-analyzing every image…`);
   try { const r = await fetch("/api/project/open", { method: "POST", body: f }); const d = await r.json(); if (!r.ok) throw new Error(d.error);
-    for (const j of d.results) { add(j); if (j.summary.roi_polygons) state.rois[j.id] = j.summary.roi_polygons; }
+    for (const j of d.results) { add(j); if (j.summary.roi_polygons) state.rois[j.id] = j.summary.roi_polygons;
+      if (j.measure_regions) { state.measure[j.id] = { regions: j.measure_regions.map((r, i) => ({ ...r, color: MCOL[i % MCOL.length] })), sel: 0 }; if (j.measure) state.mres[j.id] = { ...j.measure, byName: Object.fromEntries(j.measure.regions.map(g => [g.name, g])) }; } }
     if (d.results.length) show(d.results[d.results.length - 1].id);
     toast(`Opened ${d.results.length} image${d.results.length === 1 ? "" : "s"} (saved ${d.saved})${d.mismatches.length ? ` · results differ for ${d.mismatches.length} — software changed since saving` : " · results reproduced exactly"}`, d.mismatches.length > 0); }
   catch (err) { toast("Could not open project: " + err.message, true); } };

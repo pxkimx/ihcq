@@ -79,6 +79,28 @@ def build_report(assets: list, rows: list, stats: dict | None, out_path, title="
                 for t in (s["thr_weak"], s["thr_moderate"], s["thr_strong"]): axh.axvline(t, color="k", lw=0.6, ls="--")
                 axh.set_yticks([]); axh.tick_params(labelsize=6); axh.set_xlabel("DAB OD per cell", fontsize=6.5); axh.spines[["top", "right", "left"]].set_visible(False)
             pdf.savefig(fig); plt.close(fig)
+            mr = a.get("measure")
+            if mr and mr.get("regions"):
+                fig = plt.figure(figsize=(11.69, 8.27)); fig.patch.set_facecolor("white")
+                fig.text(0.04, 0.95, f"{s['image']} — region measurements", fontsize=15, weight="bold")
+                mm = bool(mr.get("mpp"))
+                hdr = ["region", "area (mm²)" if mm else "area (px²)", "% of total", "perimeter (µm)" if mm else "perimeter (px)", "nuclei", "% of nuclei", "nuclei/mm²" if mm else "nuclei/10⁴px", "% positive", "DAB area %"]
+                rows = [[g["name"], f"{g['area_mm2']:.5f}" if mm else f"{g['area_px']:.0f}", f"{g['pct_of_total_area']:.1f}", f"{(g.get('perimeter_um') if mm else g['perimeter_px']):.0f}",
+                         str(g.get("nuclei")), "—" if g.get("pct_of_total_nuclei") is None else f"{g['pct_of_total_nuclei']:.1f}",
+                         "—" if (g.get("nuclei_per_mm2") if mm else g.get("nuclei_per_1e4px")) is None else f"{(g.get('nuclei_per_mm2') if mm else g.get('nuclei_per_1e4px')):.1f}",
+                         "—" if g.get("pct_positive") is None else f"{g['pct_positive']:.1f}", "—" if g.get("dab_area_pct") is None else f"{g['dab_area_pct']:.1f}"] for g in mr["regions"]]
+                ax = fig.add_axes([0.04, 0.45, 0.92, 0.45]); ax.axis("off")
+                tb = ax.table(cellText=rows, colLabels=hdr, loc="upper center", cellLoc="center"); tb.auto_set_font_size(False); tb.set_fontsize(8.5); tb.scale(1, 1.4)
+                for (r_, c_), cell in tb.get_celld().items():
+                    cell.set_edgecolor("#ddd")
+                    if r_ == 0: cell.set_facecolor("#eef0f7"); cell.set_text_props(weight="bold")
+                g = mr["regions"]; lines = []
+                for i in range(len(g)):
+                    for j in range(i + 1, len(g)):
+                        if g[j]["area_px"]:
+                            lines.append(f"{g[i]['name']} / {g[j]['name']}:  area ratio {g[i]['area_px'] / g[j]['area_px']:.3f}" + (f"   nuclei ratio {g[i]['nuclei'] / g[j]['nuclei']:.3f}" if g[j].get('nuclei') else ""))
+                fig.text(0.04, 0.40, "\n".join(lines[:18]), fontsize=9, va="top", family="monospace", linespacing=1.5)
+                pdf.savefig(fig); plt.close(fig)
 
         # ---- statistics ----
         if stats and stats.get("groups"):

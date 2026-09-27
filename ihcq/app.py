@@ -361,7 +361,7 @@ def _report() -> Path:
         a = SESSION["assets"].get(rid)
         if not a: continue
         cells = pd.read_csv(a["cells_csv"]) if a.get("cells_csv") and Path(a["cells_csv"]).exists() else None
-        assets.append({"summary": a["summary"], "qc": a.get("qc", []), "images": a.get("images", {}), "cells": cells})
+        assets.append({"summary": a["summary"], "qc": a.get("qc", []), "images": a.get("images", {}), "cells": cells, "measure": a.get("measure_result")})
     stats = None
     if any(r.get("group") for r in SESSION["rows"]):
         stats = {"groups": {}, "tests": {}, "note": ""}
@@ -376,13 +376,121 @@ def _report() -> Path:
     return out
 
 
+def _measure(rid: str, regions: list, mpp: float | None = None) -> dict:
+    """Morphometry of named, user-traced regions.
+
+    Each region is the union of its traced polygons minus its cut-outs, so a
+    ring such as the media (external minus internal elastic lamina) is one
+    region.  Reports area, perimeter, nucleus counts and density, tissue and
+    DAB content, each region's share of the measured total, and every
+    pairwise ratio (area and nuclei).  Overlaps between regions are reported
+    rather than silently double-counted."""
+    entry = _cached(rid); res = entry["res"]
+    slide = bool(entry.get("slide"))
+    base = entry.get("base") or {}
+    tissue = res.tissue if slide else base.get("tissue", res.tissue)
+    shape = tissue.shape
+    scale = (shape[1] / res.summary["width"]) if slide else 1.0          # mask px per full-resolution px
+    px_area = 1.0 / (scale * scale)
+    mpp = float(mpp) if mpp else (res.config.mpp or None)
+    th = res.config.thresholds
+    dab = res.conc[..., 1]
+    # every nucleus of the full field (not just the current ROI), with bins at the current cut points
+    if slide:
+        cells = entry["slide_cells"].copy()
+    else:
+        from .metrics import per_cell_table
+        n = int(base.get("labels", res.labels).max())
+        cells = per_cell_table(base["labels"], base["score_labels"], dab, res.conc[..., 0], th, res.config.cell_statistic, res.config.mpp) if n else pd.DataFrame()
+    if len(cells):
+        from .metrics import bin_intensity
+        cells["bin"] = bin_intensity(cells["dab_od"].to_numpy(), th)
+        cy = cells["y"].round().astype(int).clip(0, shape[0] - 1).to_numpy(); cx = cells["x"].round().astype(int).clip(0, shape[1] - 1).to_numpy()
+    out, masks = [], []
+    for i, rg in enumerate(regions or []):
+        m = _polys_mask(shape, rg.get("include") or [])
+        if rg.get("exclude"):
+            m &= ~_polys_mask(shape, rg["exclude"])
+        masks.append(m)
+        a_px = float(m.sum()) * px_area
+        # perimeter = length of every traced outline, cut-outs included (a ring has two boundaries)
+        per = sum(_poly_len(pg) for pg in (rg.get("include") or []) + (rg.get("exclude") or [])) / scale
+        row = {"name": (rg.get("name") or f"Region {i + 1}").strip(), "area_px": round(a_px, 1), "perimeter_px": round(per, 1)}
+        if mpp:
+            row["area_um2"] = round(a_px * mpp * mpp, 1); row["area_mm2"] = round(a_px * mpp * mpp / 1e6, 6)
+            row["perimeter_um"] = round(row["perimeter_px"] * mpp, 1)
+        t = tissue & m
+        row["tissue_pct"] = round(float(t.sum() / max(m.sum(), 1) * 100), 2)
+        if t.any():
+            d = dab[t]
+            row["dab_area_pct"] = round(float((d >= th.weak).mean() * 100), 2)            # of the region's tissue
+            row["mean_dab_od"] = round(float(d.mean()), 4)
+        else:
+            row["dab_area_pct"] = None; row["mean_dab_od"] = None
+        if len(cells):
+            inside = m[cy, cx]; c = cells[inside]
+            nn = int(len(c)); npos = int((c["bin"] > 0).sum())
+            row.update({"nuclei": nn, "nuclei_positive": npos, "pct_positive": round(npos / nn * 100, 2) if nn else None,
+                        "h_score": round(float(((c["bin"] == 1).mean() + 2 * (c["bin"] == 2).mean() + 3 * (c["bin"] == 3).mean()) * 100), 1) if nn else None})
+            if nn:
+                from .metrics import wilson
+                lo, hi = wilson(npos, nn); row["pct_positive_ci95"] = [round(lo * 100, 1), round(hi * 100, 1)]
+            row["nuclei_per_1e4px"] = round(nn / max(a_px, 1) * 1e4, 3)
+            if mpp and a_px:
+                row["nuclei_per_mm2"] = round(nn / (a_px * mpp * mpp / 1e6), 1)
+        else:
+            row.update({"nuclei": 0, "nuclei_positive": 0, "pct_positive": None, "h_score": None})
+        out.append(row)
+    total_area = sum(r["area_px"] for r in out) or 1.0
+    total_nuc = sum(r.get("nuclei") or 0 for r in out) or 0
+    for r in out:
+        r["pct_of_total_area"] = round(r["area_px"] / total_area * 100, 2)
+        r["pct_of_total_nuclei"] = round((r.get("nuclei") or 0) / total_nuc * 100, 2) if total_nuc else None
+    ratios = []
+    for i in range(len(out)):
+        for j in range(len(out)):
+            if i == j: continue
+            a, b = out[i], out[j]
+            ratios.append({"a": a["name"], "b": b["name"],
+                           "area_ratio": round(a["area_px"] / b["area_px"], 4) if b["area_px"] else None,
+                           "nuclei_ratio": round((a.get("nuclei") or 0) / b["nuclei"], 4) if b.get("nuclei") else None,
+                           "a_pct_of_pair_area": round(a["area_px"] / (a["area_px"] + b["area_px"]) * 100, 2) if (a["area_px"] + b["area_px"]) else None})
+    overlaps = []
+    for i in range(len(masks)):
+        for j in range(i + 1, len(masks)):
+            ov = float((masks[i] & masks[j]).sum()) * px_area
+            if ov > 0.005 * max(min(out[i]["area_px"], out[j]["area_px"]), 1):      # ignore slivers along a shared, separately traced edge
+                overlaps.append({"a": out[i]["name"], "b": out[j]["name"], "overlap_px": round(ov, 1),
+                                 "pct_of_smaller": round(ov / max(min(out[i]["area_px"], out[j]["area_px"]), 1) * 100, 2)})
+    entry["measure"] = regions
+    csv = OUT / f"{entry['stamp']}_measurements.csv"
+    pd.DataFrame(out).drop(columns=["pct_positive_ci95"], errors="ignore").to_csv(csv, index=False)
+    SESSION["assets"].setdefault(rid, {})["measure"] = regions
+    SESSION["assets"][rid]["measure_result"] = {"regions": out, "mpp": mpp}
+    return {"regions": out, "ratios": ratios, "overlaps": overlaps, "mpp": mpp, "unit_note": None if mpp else "set the pixel size (µm/px) to get µm² and mm²",
+            "csv": f"/out/{csv.name}", "total_area_px": round(total_area, 1), "total_nuclei": total_nuc}
+
+
 def _polys_mask(shape, polys) -> np.ndarray:
-    from PIL import ImageDraw
-    m = Image.new("L", (shape[1], shape[0]), 0); d = ImageDraw.Draw(m)
+    """Union of polygons as a pixel mask, by the pixel-CENTRE rule.
+
+    Pixel (r, c) covers [c, c+1) × [r, r+1) in image coordinates; it is inside
+    when its centre is.  Filling every pixel the outline touches (PIL's rule)
+    over-counts by half a pixel all round — 2 % on a 100-px square — and
+    double-counts a boundary shared by two traced regions."""
+    from skimage.draw import polygon as _poly
+    m = np.zeros(shape, bool)
     for poly in polys or []:
-        pts = [(float(x), float(y)) for x, y in poly]
-        if len(pts) >= 3: d.polygon(pts, fill=1)
-    return np.array(m, dtype=bool)
+        a = np.asarray(poly, float)
+        if len(a) >= 3:
+            rr, cc = _poly(a[:, 1] - 0.5, a[:, 0] - 0.5, shape)
+            m[rr, cc] = True
+    return m
+
+
+def _poly_len(poly) -> float:
+    a = np.asarray(poly, float)
+    return float(np.hypot(*(np.roll(a, -1, 0) - a).T).sum()) if len(a) >= 3 else 0.0
 
 
 PROJECT_VERSION = 1
@@ -402,7 +510,7 @@ def _project_save() -> Path:
             arc = f"images/{k:03d}_{_safe(r['image'])}.png"
             z.write(orig, arc)
             items.append({"name": r["image"], "file": arc, "config": a.get("config"), "roi": a.get("roi", {"include": [], "exclude": []}),
-                          "clicks": a.get("clicks"), "tumour_only": a.get("tumour_only"),
+                          "clicks": a.get("clicks"), "tumour_only": a.get("tumour_only"), "measure": a.get("measure"), "measure_mpp": (a.get("measure_result") or {}).get("mpp"),
                           "thresholds": a.get("thresholds"), "group": r.get("group", ""), "summary_at_save": {x: r.get(x) for x in ("n_cells", "pct_positive", "h_score", "her2_score")}})
         z.writestr("manifest.json", json.dumps({"format": "IHCq project", "version": PROJECT_VERSION, "saved": time.strftime("%Y-%m-%d %H:%M"), "images": items}, indent=2))
     return out
@@ -436,6 +544,8 @@ def _project_open(raw: bytes) -> dict:
             out = _classify(rid, it["clicks"]["tumour"], it["clicks"]["stroma"], bool(it.get("tumour_only", True)))
         elif it.get("tumour_only") is not None:
             e = _cached(rid); e["tumour_only"] = bool(it["tumour_only"]); out = _derive(e)
+        if it.get("measure"):
+            out["measure"] = _measure(rid, it["measure"], it.get("measure_mpp")); out["measure_regions"] = it["measure"]
         was, now = it.get("summary_at_save", {}), out["summary"]
         if was.get("h_score") is not None and now.get("h_score") is not None and abs(was["h_score"] - now["h_score"]) > 0.05:
             mismatches.append(it["name"])
@@ -651,6 +761,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/tumour_only":
                 e = _cached(q["id"][0]); e["tumour_only"] = (q.get("on") or ["1"])[0] == "1"
                 return self._send(200, _derive(e))
+            if u.path == "/api/measure":
+                body = json.loads(raw or b"{}")
+                return self._send(200, _measure(q["id"][0], body.get("regions") or [], body.get("mpp")))
             if u.path == "/api/regions":
                 body = json.loads(raw or b"{}")
                 return self._send(200, _regions(q["id"][0], body.get("include") or []))
