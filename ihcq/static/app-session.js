@@ -76,10 +76,11 @@ $("#fit-btn").onclick = async () => {
       <p class="mut" style="margin-top:8px">The negative control anchors the 0/1+ cut (its 99.5th percentile × 1.15); upper cuts sit between adjacent positive-cell populations. Save the profile from the Score tab once you are happy with it.</p>`;
     $("#use-cal").onclick = () => { $("#weak").value = t.weak; $("#moderate").value = t.moderate; $("#strong").value = t.strong; syncTh(); showView("score"); toast("Cut points set for new images"); };
     $("#apply-all").onclick = async () => { let n = 0; for (const id of [...state.order]) { const r2 = await fetch(`/api/rebin?id=${id}&weak=${t.weak}&moderate=${t.moderate}&strong=${t.strong}`, { method: "POST" }); if (r2.ok) { const nj = await r2.json(); nj.truth = state.results[id].truth; add(nj); n++; } } $("#weak").value = t.weak; $("#moderate").value = t.moderate; $("#strong").value = t.strong; syncTh(); toast(`Re-binned ${n} image${n === 1 ? "" : "s"}`); if (state.cur) show(state.cur); };
-  } catch (err) { $("#cal-out").innerHTML = `<span style="color:var(--bad)">${err.message}</span>`; }
+  } catch (err) { $("#cal-out").innerHTML = `<span style="color:var(--badt)">${err.message}</span>`; }
 };
 
 /* ---------- keyboard ---------- */
 document.addEventListener("keydown", e => { if (/input|select|textarea/i.test(e.target.tagName)) return; if (e.key === "1") setLayer("original"); if (e.key === "2") setLayer("cells"); if (e.key === "3") setLayer("positivity"); if (e.key.toLowerCase() === "f") { fitView(); drawViewer(); } if (e.key === "Enter" && !$("#apply").disabled) applyTh(); if (e.key === "ArrowLeft" || e.key === "ArrowRight") { const i = state.order.indexOf(state.cur); if (i < 0) return; const nx = state.order[i + (e.key === "ArrowRight" ? 1 : -1)]; if (nx) show(nx); } });
-function drawAll() { if (state.cur) { drawViewer(); drawHist(); } }
+/* on a theme change: canvases and the SVG charts bake their colours in when drawn, so redraw them all */
+function drawAll() { if (state.cur) { drawViewer(); drawHist(); } if (state.order.length) refreshAll(); }
 matchMedia("(prefers-color-scheme: light)").addEventListener("change", drawAll);

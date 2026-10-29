@@ -8,6 +8,30 @@ every threshold written into every result.
 No deep learning is required. Nuclei are found by a hematoxylin-driven
 watershed; StarDist can be dropped in for crowded or irregular tissue.
 
+It also does:
+
+- HER2 membrane completeness (ASCO/CAP categories);
+- tumour-vs-stroma scoring;
+- whole-slide TIFF/SVS analysis;
+- traced-region morphometry (area, nuclei and ratios);
+- group statistics and PDF reports.
+
+It runs as a local desktop app in your browser; nothing leaves your computer.
+
+**Project page:** [paul-h-kim.com/software/ihcq](https://paul-h-kim.com/software/ihcq). **Licence:** MIT (see `LICENSE`).
+
+### Quick start
+
+```bash
+git clone https://github.com/pxkimx/ihcq.git && cd ihcq
+pip install -e '.[wsi]'
+ihcq app                    # opens http://127.0.0.1:8770; try "Open a demo field"
+```
+
+On a Mac, `scripts/build_app.sh` builds a double-clickable `IHCq.app` for this
+checkout. The bundled demo image is scikit-image's public IHC reference image;
+the synthetic demo fields are generated with known ground truth.
+
 ## Install
 
 ```bash
@@ -37,12 +61,22 @@ The classical backend needs none of this and runs anywhere the core installs.
 The interface follows Apple's design language: system typography, one accent colour, quiet grouped surfaces, translucent toolbars, and colour reserved for data (the four bin colours). It follows the system light/dark setting.
 
 ```bash
-ihcq app                    # opens http://127.0.0.1:8765 in your browser
+ihcq app                    # opens http://127.0.0.1:8770 in your browser
 ```
 
-`IHCq.app` on the Desktop (rebuild with `scripts/build_app.sh`) launches
+`IHCq.app` in `~/Desktop/Toolbox` (rebuild with `scripts/build_app.sh`) launches
 the same thing with a click. It is a local server on the loopback
-interface; nothing leaves the machine. What it does:
+interface; nothing leaves the machine.
+
+It quits completely when you are done (`ihcq/lifecycle.py`). The server,
+its whole-slide workers and the Dock icon all stop when:
+
+- the tab or window is closed (about 6 s later);
+- the app is quitted or force-quit from the Dock;
+- **Quit** is pressed in the top bar;
+- the browser crashes, or a tab has been gone for 3 min without saying goodbye.
+
+Reloading the page does not quit it. What it does:
 
 - **Score** — drop any number of images (a queue with per-file status), or
   open the built-in demo: a real colon field with membranous DAB, or

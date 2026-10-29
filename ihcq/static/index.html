@@ -6,6 +6,8 @@
 <title>IHCq</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<script>/* apply the saved theme before first paint; with no choice saved, follow the system as before */
+try { var t = localStorage.getItem("theme") || localStorage.getItem("ihcq-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -22,7 +24,10 @@
   <div class="top-actions">
     <label class="btn sm" title="Open a saved .ihcq project">Open…<input id="proj-open" type="file" accept=".ihcq,.zip" hidden></label>
     <a class="btn sm" id="proj-save" href="/api/project/save" download title="Save every image, its settings, regions and group">Save project</a>
-    <button class="icon" id="theme" title="Light / dark">◐</button>
+    <div class="seg theme-seg" id="theme" role="radiogroup" aria-label="Theme">
+      <button type="button" role="radio" data-t="light" aria-checked="false" title="Light theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg><span class="tl">Light</span></button>
+      <button type="button" role="radio" data-t="dark" aria-checked="false" title="Dark theme"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8.3 8.3 0 0 1 9.4 4a8.3 8.3 0 1 0 10.6 10.6z"/></svg><span class="tl">Dark</span></button>
+    </div>
     <button class="btn ghost" id="quit" title="Stop the local server">Quit</button>
   </div>
 </header>

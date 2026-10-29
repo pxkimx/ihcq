@@ -8,8 +8,15 @@ const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "
 const state = { teach: null, clicks: {}, pick: null, custom: { white: null, hema: null, dab: null }, csort: { c: "dab", dir: -1 }, cfilter: "all", rois: {}, tool: null, drawing: null, heat: null, results: {}, order: [], cur: null, th: { weak: .15, moderate: .40, strong: .80 }, layer: "cells", zoom: 1, pan: { x: 0, y: 0 }, imgs: {}, hover: null, sort: { k: "image", dir: 1 } };
 
 /* ---------- theme ---------- */
-try { const t = localStorage.getItem("ihcq-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
-$("#theme").onclick = () => { const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); const nx = cur === "light" ? "dark" : "light"; document.documentElement.dataset.theme = nx; try { localStorage.setItem("ihcq-theme", nx); } catch (e) {} drawAll(); };
+/* Light | Dark: the choice is stored as localStorage "theme"; until one is picked IHCq follows the system, as it always has */
+const sysTheme = () => matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+const curTheme = () => document.documentElement.dataset.theme || sysTheme();
+function syncTheme() { const t = curTheme(); $$("#theme button").forEach(b => { const on = b.dataset.t === t; b.setAttribute("aria-checked", on); b.setAttribute("aria-pressed", on); b.tabIndex = on ? 0 : -1; }); }
+function setTheme(t) { document.documentElement.dataset.theme = t; try { localStorage.setItem("theme", t); localStorage.removeItem("ihcq-theme"); } catch (e) {} syncTheme(); if (typeof drawAll === "function") drawAll(); }
+$$("#theme button").forEach(b => b.onclick = () => setTheme(b.dataset.t));
+$("#theme").addEventListener("keydown", e => { if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) { e.preventDefault(); setTheme(curTheme() === "light" ? "dark" : "light"); $(`#theme button[data-t="${curTheme()}"]`).focus(); } });
+matchMedia("(prefers-color-scheme: light)").addEventListener("change", syncTheme);
+syncTheme();
 
 
 /* ---------- toast ---------- */

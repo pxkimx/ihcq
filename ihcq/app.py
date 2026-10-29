@@ -32,12 +32,13 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
+from . import lifecycle
 from .config import Config, Thresholds
 
-HOST, PORT = "127.0.0.1", 8765
+HOST, PORT = "127.0.0.1", 8770
 OUT = Path(tempfile.mkdtemp(prefix="ihcq_"))
 STATIC = Path(__file__).parent / "static"
-SESSION = {"rows": [], "cache": OrderedDict(), "assets": {}, "groups": {}, "lock": threading.Lock(), "server": None, "seq": 0}
+SESSION = {"rows": [], "cache": OrderedDict(), "assets": {}, "groups": {}, "payloads": {}, "lock": threading.Lock(), "server": None, "seq": 0}
 CACHE_MAX = 12
 
 
@@ -76,6 +77,16 @@ def _safe(stem: str) -> str:
 
 
 def _payload(rid: str, entry: dict, paths: dict) -> dict:
+    """The result as the page shows it; the latest one per image is kept so a reloaded page can rebuild its session."""
+    out = _build_payload(rid, entry, paths)
+    prev = SESSION["payloads"].get(rid) or {}
+    for k in ("truth", "note"):                          # demo extras survive re-binning and ROIs
+        if k in prev: out[k] = prev[k]
+    SESSION["payloads"][rid] = out
+    return out
+
+
+def _build_payload(rid: str, entry: dict, paths: dict) -> dict:
     res = entry["res"]
     cells = res.cells
     cols = ["x", "y", "area_px", "dab_od", "hema_od", "bin"]
@@ -95,8 +106,9 @@ def _payload(rid: str, entry: dict, paths: dict) -> dict:
 def _record(rid: str, entry: dict, paths: dict | None = None):
     row = {"id": rid, "image": entry["name"], "group": SESSION["groups"].get(rid, ""), **entry["res"].summary}
     if paths is not None:
-        SESSION["assets"][rid] = {"images": {"original": str(entry["orig"]), **{k: str(v) for k, v in paths.items()}},
-                                  "cells_csv": str(entry["cells_csv"]) if entry.get("cells_csv") else None}
+        SESSION["assets"].setdefault(rid, {}).update(       # update, not replace: keep traced measurements across re-bins
+            {"images": {"original": str(entry["orig"]), **{k: str(v) for k, v in paths.items()}},
+             "cells_csv": str(entry["cells_csv"]) if entry.get("cells_csv") else None})
     SESSION["assets"].setdefault(rid, {})["summary"] = row; SESSION["assets"][rid]["qc"] = entry["res"].qc
     # replaying a result exactly needs the settings it was SEGMENTED with (base) and
     # the cut points it is currently BINNED with — segmentation uses the weak cut
@@ -671,10 +683,34 @@ class Handler(BaseHTTPRequestHandler):
         if download: self.send_header("Content-Disposition", f'attachment; filename="{p.name}"')
         self.end_headers(); self.wfile.write(data)
 
+    def _presence(self):
+        """Held open by every page for as long as it is open, so the server knows when the last one goes."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream"); self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        lifecycle.page_opened()
+        try:
+            while True:
+                self.wfile.write(b": here\n\n"); self.wfile.flush()
+                time.sleep(lifecycle.CHECK_S)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            lifecycle.page_closed()
+        self.close_connection = True
+
     def do_GET(self):
+        try:
+            return self._get()
+        except Exception as e:
+            return self._send(400, {"error": f"{type(e).__name__}: {e}"})
+
+    def _get(self):
         u = urllib.parse.urlparse(self.path); q = urllib.parse.parse_qs(u.query)
         if u.path == "/":
             return self._file(STATIC / "index.html", "text/html; charset=utf-8")
+        if u.path == "/api/presence":
+            return self._presence()
         if u.path.startswith("/static/"):
             name = Path(u.path).name
             ctype = {"css": "text/css", "js": "application/javascript", "svg": "image/svg+xml"}.get(name.rsplit(".", 1)[-1], "application/octet-stream")
@@ -715,7 +751,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {k: v for k, v in j.items() if k != "thread"})
         if u.path == "/api/session":
             with SESSION["lock"]:
-                return self._send(200, {"rows": SESSION["rows"], "cached": list(SESSION["cache"].keys())})
+                rows = list(SESSION["rows"])
+            out = {"rows": rows, "cached": list(SESSION["cache"].keys())}
+            if (q.get("full") or ["0"])[0] == "1":         # everything a reloaded page needs to rebuild its list and charts
+                results = []
+                for r in rows:
+                    j = SESSION["payloads"].get(r["id"])
+                    if not j: continue
+                    j = {**j, "summary": {**j["summary"], "group": SESSION["groups"].get(r["id"], j["summary"].get("group", ""))}}
+                    a = SESSION["assets"].get(r["id"], {})
+                    if a.get("measure"): j["measure_regions"], j["measure"] = a["measure"], a.get("measure_result")
+                    results.append(j)
+                out["results"] = results
+            return self._send(200, out)
         if u.path.startswith("/out/"):
             p = OUT / Path(u.path[5:]).name
             return self._file(p, "image/png" if p.suffix == ".png" else "text/csv", download=p.suffix == ".csv")
@@ -724,6 +772,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urllib.parse.urlparse(self.path); q = urllib.parse.parse_qs(u.query)
         n = int(self.headers.get("Content-Length", 0))
+        if u.path == "/api/closing":                     # beacon from a page that is going away
+            self.rfile.read(n) if n else None; lifecycle.page_closing()
+            self.send_response(204); self.end_headers(); return
         if u.path == "/api/slide":                       # stream to disk — slides can be gigabytes
             name = (q.get("name") or ["slide.svs"])[0]
             fd, tmp = tempfile.mkstemp(suffix=Path(name).suffix or ".tif", dir=OUT)
@@ -742,7 +793,12 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(n) if n else b""
         try:
             if u.path == "/api/quit":
-                self._send(200, {"ok": True}); threading.Thread(target=SESSION["server"].shutdown, daemon=True).start(); return
+                self._send(200, {"ok": True})
+                if lifecycle._state["server"] is not None:
+                    threading.Thread(target=lifecycle.quit_now, args=("Quit was pressed",), daemon=True).start()
+                else:
+                    threading.Thread(target=SESSION["server"].shutdown, daemon=True).start()
+                return
             if u.path == "/api/score":
                 from .io import _to_rgb8
                 Image.MAX_IMAGE_PIXELS = None
@@ -802,6 +858,7 @@ def main(open_browser: bool = True, port: int = PORT):
         return
     server = ThreadingHTTPServer((HOST, port), Handler)
     SESSION["server"] = server
+    lifecycle.start(server)                              # quit when the last window closes or the launcher goes
     print(f"IHCq app at {url}   (outputs in {OUT})")
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()

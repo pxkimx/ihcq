@@ -111,3 +111,38 @@ def test_measure_regions(server):
     assert m["overlaps"] == []
     whole = post(server, f"/api/measure?id={rid}", json.dumps({"regions": [{"name": "All", "include": [circ(250)], "exclude": [circ(120)]}]}).encode())
     assert whole["regions"][0]["nuclei"] == r["Media"]["nuclei"] + r["Adventitia"]["nuclei"]
+
+
+def test_synthetic_demos_read_near_truth_with_the_nuclear_preset(server):
+    """The page switches to the Nuclear preset for synthetic fields; scored that way each lands near its truth."""
+    for kind in ("negative", "low", "mixed", "high"):
+        j = get(server, f"/api/demo?kind={kind}&compartment=nuclear&statistic=mean")
+        assert abs(j["summary"]["h_score"] - j["truth"]["h_score"]) < 25, (kind, j["summary"]["h_score"], j["truth"])
+    with pytest.raises(U.HTTPError) as e:                             # a bad setting is an error message, not a dropped connection
+        get(server, "/api/demo?kind=low&compartment=nucleus")
+    assert e.value.code == 400
+
+
+def test_session_survives_a_page_reload(server):
+    """GET /api/session?full=1 hands a reloaded page every result, with demo truth, groups and measurements."""
+    j = get(server, "/api/demo?kind=mixed")
+    post(server, "/api/group", {"id": j["id"], "group": "ctrl"})
+    sq = [[20, 20], [120, 20], [120, 120], [20, 120]]
+    post(server, f"/api/measure?id={j['id']}", json.dumps({"regions": [{"name": "A", "include": [sq]}]}).encode())
+    post(server, f"/api/rebin?id={j['id']}&weak=0.1&moderate=0.3&strong=0.6")
+    d = get(server, "/api/session?full=1")
+    r = next(x for x in d["results"] if x["id"] == j["id"])
+    assert r["truth"] == j["truth"] and r["summary"]["group"] == "ctrl"
+    assert r["thresholds"]["weak"] == 0.1 and r["cells"] and r["original"]
+    assert r["measure_regions"][0]["name"] == "A" and r["measure"]["regions"][0]["area_px"] == 10000
+    assert [x["id"] for x in d["results"]] == [x["id"] for x in d["rows"] if x["id"] in {y["id"] for y in d["results"]}]
+
+
+def test_theme_switch_is_wired_before_first_paint(server):
+    """Light | Dark pill in the top bar; the saved choice is applied in <head>, before the stylesheet."""
+    html = U.urlopen(server + "/").read().decode()
+    head = html.split("</head>")[0]
+    assert head.index('localStorage.getItem("theme")') < head.index("/static/app.css")
+    assert 'role="radiogroup"' in html and 'data-t="light"' in html and 'data-t="dark"' in html
+    css = U.urlopen(server + "/static/app.css").read().decode()
+    assert ':root[data-theme="dark"]' in css and ':not([data-theme="light"])' in css

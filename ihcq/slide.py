@@ -146,7 +146,9 @@ def is_slide(path) -> bool:
 _W = {}
 
 
-def _worker_init(path):
+def _worker_init(path, server_pid=None):
+    from .lifecycle import die_with_parent
+    die_with_parent(server_pid)                                    # never outlive the app that started us
     _W["slide"] = Slide(path)
 
 
@@ -243,7 +245,7 @@ def analyze_slide(path, cfg=None, tile: int = 2048, overlap: int = 64, workers: 
     cells_parts, agg = [], {"tissue_px": 0, "pos_px": 0, "sum_od": 0.0, "bins": np.zeros(4, np.int64), "hist": np.zeros(300, np.int64), "hema_pos_px": 0}
     done = 0
     if progress: progress(0, len(jobs))
-    with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init, initargs=(sl.path,)) as ex:
+    with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init, initargs=(sl.path, os.getpid())) as ex:
         futs = [ex.submit(_tile_job, j) for j in jobs]
         for f in as_completed(futs):
             c, st = f.result()

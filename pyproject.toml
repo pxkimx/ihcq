@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ihcq"
-version = "0.1.0"
+version = "0.2.0"
+license = {text = "MIT"}
 description = "IHCq — reproducible chromogenic IHC quantification: H-score, Allred, positivity area fraction and optical density"
 requires-python = ">=3.9"
 dependencies = [
@@ -16,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-wsi = ["tifffile>=2023.7.10", "zarr>=2.16"]
+wsi = ["tifffile>=2023.7.10", "imagecodecs"]
 dl = ["stardist>=0.9", "tensorflow>=2.13"]
 dev = ["pytest>=7.4"]
 

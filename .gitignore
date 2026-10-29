@@ -8,3 +8,18 @@ app_icon.png
 IHCq.icns
 IHCq.app/
 .venv-dl/
+# never published: the user's own images and results, local environments, build products, logs
+IHC examples/
+*.svs
+*.ndpi
+*.mrxs
+.venv*/
+venv/
+*.zip
+*.dmg
+*.log
+ihcq_report_*.pdf
+*_measurements.csv
+Screenshot*.png
+tests/_out/
+.coverage

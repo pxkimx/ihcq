@@ -224,7 +224,7 @@ def main(argv=None):
 
     ap = sub.add_parser("app", help="open the local desktop UI in your browser")
     ap.add_argument("--no-browser", action="store_true")
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--port", type=int, default=8770)
     ap.set_defaults(func=lambda a: __import__("ihcq.app", fromlist=["main"]).main(open_browser=not a.no_browser, port=a.port))
 
     a = p.parse_args(argv)
