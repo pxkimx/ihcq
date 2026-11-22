@@ -17,6 +17,8 @@ from __future__ import annotations
 import io as _io
 import json
 import os
+import atexit
+import shutil
 import socket
 import sys
 import tempfile
@@ -36,7 +38,25 @@ from . import lifecycle
 from .config import Config, Thresholds
 
 HOST, PORT = "127.0.0.1", 8770
-OUT = Path(tempfile.mkdtemp(prefix="ihcq_"))
+OUT = Path(tempfile.mkdtemp(prefix="ihcq_"))          # overlays, CSVs, reports for this run; removed on quit
+
+
+def _remove_out():
+    shutil.rmtree(OUT, ignore_errors=True)
+
+
+def _sweep_stale_outputs(max_age_h: float = 12) -> None:
+    """Remove output folders left by runs that were killed outright (no chance to clean up)."""
+    cutoff = time.time() - max_age_h * 3600
+    for d in Path(tempfile.gettempdir()).glob("ihcq_*"):
+        try:
+            if d != OUT and d.is_dir() and d.stat().st_mtime < cutoff:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+
+
+atexit.register(_remove_out)
 STATIC = Path(__file__).parent / "static"
 SESSION = {"rows": [], "cache": OrderedDict(), "assets": {}, "groups": {}, "payloads": {}, "lock": threading.Lock(), "server": None, "seq": 0}
 CACHE_MAX = 12
@@ -749,6 +769,9 @@ class Handler(BaseHTTPRequestHandler):
             j = JOBS.get((q.get("id") or [""])[0])
             if not j: return self._send(404, {"error": "no such job"})
             return self._send(200, {k: v for k, v in j.items() if k != "thread"})
+        if u.path == "/api/health":                     # for Toolbox Launcher and other tools
+            from . import __version__
+            return self._send(200, {"app": "ihcq", "name": "IHCq", "version": __version__, "pid": os.getpid(), "port": self.server.server_address[1]})
         if u.path == "/api/session":
             with SESSION["lock"]:
                 rows = list(SESSION["rows"])
@@ -859,6 +882,8 @@ def main(open_browser: bool = True, port: int = PORT):
     server = ThreadingHTTPServer((HOST, port), Handler)
     SESSION["server"] = server
     lifecycle.start(server)                              # quit when the last window closes or the launcher goes
+    lifecycle.on_quit(_remove_out)
+    _sweep_stale_outputs()
     print(f"IHCq app at {url}   (outputs in {OUT})")
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()

@@ -107,3 +107,21 @@ def test_sigterm_and_quit_button():
         assert _gone(p, port, 6)
     finally:
         p.kill()
+
+
+def test_output_folder_removed_on_quit():
+    """Overlays, CSVs and reports live in a per-run temp folder; closing the window must delete it."""
+    import tempfile
+    tmp = Path(tempfile.gettempdir())
+    before = set(tmp.glob("ihcq_*"))
+    p, base, port = _start()
+    try:
+        page = _open_page(base); page.read(4)
+        U.urlopen(base + "/api/demo?kind=low", timeout=60).read()
+        mine = [d for d in set(tmp.glob("ihcq_*")) - before if any(d.iterdir())]
+        assert len(mine) == 1                                       # found it, and it holds files: an empty find must fail
+        _beacon(base); page.close()
+        assert _gone(p, port, 8)
+        assert not mine[0].exists()
+    finally:
+        p.kill()

@@ -23,7 +23,8 @@ PY
 iconutil -c icns IHCq.iconset -o IHCq.icns && rm -rf IHCq.iconset
 mkdir -p IHCq.app/Contents/MacOS IHCq.app/Contents/Resources
 cp IHCq.icns IHCq.app/Contents/Resources/IHCq.icns
-cp scripts/Info.plist IHCq.app/Contents/Info.plist
+VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' ihcq/__init__.py)
+sed "s#@VERSION@#$VERSION#g" scripts/Info.plist > IHCq.app/Contents/Info.plist
 sed "s#@PROJECT@#$PWD#" scripts/launcher.sh > IHCq.app/Contents/MacOS/IHCq && chmod +x IHCq.app/Contents/MacOS/IHCq
 mkdir -p "$HOME/Desktop/Toolbox" && rm -rf "$HOME/Desktop/Toolbox/IHCq.app" && cp -R IHCq.app "$HOME/Desktop/Toolbox/IHCq.app" && touch "$HOME/Desktop/Toolbox/IHCq.app"
 echo "IHCq.app rebuilt and copied to ~/Desktop/Toolbox"

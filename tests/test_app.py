@@ -146,3 +146,28 @@ def test_theme_switch_is_wired_before_first_paint(server):
     assert 'role="radiogroup"' in html and 'data-t="light"' in html and 'data-t="dark"' in html
     css = U.urlopen(server + "/static/app.css").read().decode()
     assert ':root[data-theme="dark"]' in css and ':not([data-theme="light"])' in css
+
+
+def test_compressed_slide_decodes(tmp_path):
+    """Real .svs tiles are JPEG (or LZW/JPEG 2000): the environment must carry imagecodecs, or every real slide fails.
+    The uncompressed slide in test_slide_job cannot catch that, so this one is JPEG on purpose — no skip."""
+    import tifffile
+    from ihcq.slide import Slide
+    rgb, *_ = make_field(n_cells=200, seed=4, size=(768, 1024))
+    p = tmp_path / "j.svs"
+    with tifffile.TiffWriter(p, bigtiff=True) as tw:
+        tw.write(rgb, tile=(256, 256), photometric="rgb", compression="jpeg", description="Aperio test|MPP = 0.5")
+    tile = Slide(str(p)).read(0, 0, 0, 256, 256)                   # through IHCq's own tile decoder
+    assert tile.shape[:2] == (256, 256) and abs(float(tile.mean()) - float(rgb[:256, :256].mean())) < 8
+
+
+def test_health_reports_version(server):
+    from ihcq import __version__
+    h = get(server, "/api/health")
+    assert h["app"] == "ihcq" and h["version"] == __version__
+
+
+def test_no_remote_assets_on_the_page(server):
+    """The app must look the same offline: nothing on the page loads from the internet."""
+    html = U.urlopen(server + "/").read().decode()
+    assert "https://" not in html.split("<body")[0] and "googleapis" not in html

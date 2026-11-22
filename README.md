@@ -39,20 +39,22 @@ pip install -e .            # core: numpy, scipy, scikit-image, pandas, pillow
 pip install -e '.[wsi]'     # + tifffile for pyramidal / whole-slide TIFF
 ```
 
-**StarDist backend — use a separate environment.** TensorFlow drags in
-NumPy 2 and a Keras build that segfaults next to packages compiled against
-NumPy 1.x, which is what a typical Anaconda base carries. Don't install it
-into base; give it its own env:
+**The app's environment.** Give IHCq its own environment on a standalone
+Python (python.org or Homebrew), not on Anaconda's base. TensorFlow pulls in
+NumPy 2, and a conda base built on NumPy 1.x breaks beside it. The launcher
+looks for this environment first:
 
 ```bash
-python3 -m venv .venv-dl                      # inside the project; any Python ≥3.9 works
-.venv-dl/bin/pip install "numpy>=2,<2.3" scipy scikit-image pandas pillow tifffile "tensorflow>=2.16" stardist
-.venv-dl/bin/pip install -e . --no-deps
-.venv-dl/bin/ihcq score fields/*.png --backend stardist -o results.csv
+V="$HOME/Library/Application Support/IHCq/venv"
+/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 -m venv "$V"
+"$V/bin/python" -m pip install "numpy>=2,<2.3" scipy scikit-image pandas pillow tifffile imagecodecs matplotlib "tensorflow>=2.16" stardist
+"$V/bin/python" -m pip install -e . --no-deps
+"$V/bin/ihcq" score fields/*.png --backend stardist -o results.csv
 ```
 
-(A conda env works the same way if your conda is healthy; a plain venv has
-fewer moving parts.)
+`imagecodecs` is required for whole slides: real `.svs` tiles are JPEG, LZW
+or JPEG 2000 compressed. Use `python -m pip` rather than `bin/pip`; it keeps
+working even if the folder is moved.
 
 The classical backend needs none of this and runs anywhere the core installs.
 
@@ -128,7 +130,7 @@ Reloading the page does not quit it. What it does:
   switch.
 - **Whole slides** — drop an `.svs` / pyramidal TIFF; progress per tile.
 
-The launcher uses `.venv-dl` when it exists (hybrid and StarDist finders
+The launcher uses that environment when it exists (hybrid and StarDist finders
 available in the menu); otherwise the base Python and the classical finder.
 Logs go to `~/Library/Logs/ihcq.log`; *Quit* stops the server.
 
@@ -253,7 +255,7 @@ on well-counterstained fields it beats the classical detector outright
 blind to the ghost-pale negatives of regions 40 and 7 (recall 0.3–0.5),
 which is exactly where the Ki-67 index goes wrong. The hybrid keeps
 StarDist's outlines and adds classical detections it has no match for; it is
-the best overall and the recommended backend when the `.venv-dl` environment
+the best overall and the recommended backend when the StarDist environment
 is available. The classical default needs no model and is within a point of
 it on this set.
 

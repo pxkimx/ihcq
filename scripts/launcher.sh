@@ -1,13 +1,17 @@
 #!/bin/bash
 # Launches the IHCq local UI and opens it in the default browser.
-# Prefers the isolated .venv-dl (StarDist backend available);
-# falls back to the base Anaconda Python (classical backend only).
+# Prefers the standalone environment in ~/Library/Application Support/IHCq/venv
+# (python.org Python, StarDist + imagecodecs for whole slides), then the older
+# in-folder .venv-dl, then whatever python3 is on the system (classical backend only).
 # IHCq quits completely when its window is closed or this launcher is quit:
 # the server watches this process (IHCQ_LAUNCHER_PID), and this process ends with the server.
 # build_app.sh writes this checkout's folder in place of @PROJECT@ when it builds the app; IHCQ_HOME overrides it.
 PROJECT="${IHCQ_HOME:-@PROJECT@}"
 LOG="$HOME/Library/Logs/ihcq.log"
-if [ -x "$PROJECT/.venv-dl/bin/python3" ]; then
+VENV="$HOME/Library/Application Support/IHCq/venv"
+if [ -x "$VENV/bin/python3" ]; then
+  PY="$VENV/bin/python3"
+elif [ -x "$PROJECT/.venv-dl/bin/python3" ]; then
   PY="$PROJECT/.venv-dl/bin/python3"
 elif [ -x /opt/anaconda3/envs/ihcq-dl/bin/python3 ]; then
   PY=/opt/anaconda3/envs/ihcq-dl/bin/python3

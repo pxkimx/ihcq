@@ -4,8 +4,8 @@
  <key>CFBundleName</key><string>IHCq</string>
  <key>CFBundleDisplayName</key><string>IHCq</string>
  <key>CFBundleIdentifier</key><string>local.ihcq.app</string>
- <key>CFBundleVersion</key><string>0.1.0</string>
- <key>CFBundleShortVersionString</key><string>0.1.0</string>
+ <key>CFBundleVersion</key><string>@VERSION@</string>
+ <key>CFBundleShortVersionString</key><string>@VERSION@</string>
  <key>CFBundlePackageType</key><string>APPL</string>
  <key>CFBundleExecutable</key><string>IHCq</string>
  <key>CFBundleIconFile</key><string>IHCq</string>

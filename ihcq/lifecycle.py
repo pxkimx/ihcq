@@ -32,7 +32,7 @@ AFTER_SILENCE = 90       # checks with nobody connected and no such message (abo
 LAUNCHER_ENV = "IHCQ_LAUNCHER_PID"
 
 _lock = threading.Lock()
-_state = {"connected": 0, "closing": False, "started": False, "server": None}
+_state = {"connected": 0, "closing": False, "started": False, "server": None, "cleanup": []}
 
 
 def _log(text: str) -> None:
@@ -89,9 +89,23 @@ def stop_children() -> None:
             p.kill()
 
 
+def on_quit(fn) -> None:
+    """Run fn on the way out (os._exit below skips atexit, so quitting calls these itself)."""
+    _state["cleanup"].append(fn)
+
+
+def run_cleanup() -> None:
+    while _state["cleanup"]:
+        try:
+            _state["cleanup"].pop()()
+        except Exception:
+            pass
+
+
 def quit_now(reason: str) -> None:
     _log(f"quitting: {reason}")
     stop_children()
+    run_cleanup()
     srv = _state["server"]
     if srv is not None:
         threading.Thread(target=srv.shutdown, daemon=True).start()
